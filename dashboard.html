@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ozon Performance Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  :root {
+    --bg:      #0d1018;
+    --surface: #151820;
+    --card:    #1c2030;
+    --card2:   #232840;
+    --border:  #2a3050;
+    --accent:  #4f6ef7;
+    --accent2: #00c2ff;
+    --green:   #22c55e;
+    --red:     #ef4444;
+    --yellow:  #f59e0b;
+    --text:    #e2e8f0;
+    --muted:   #64748b;
+    --r:       14px;
+    --font:    'Inter', system-ui, sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;font-size:14px}
+
+  /* ── HEADER ─────────────────────────── */
+  .header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 28px;background:var(--surface);
+    border-bottom:1px solid var(--border);
+    position:sticky;top:0;z-index:200;backdrop-filter:blur(12px);
+  }
+  .logo{display:flex;align-items:center;gap:11px}
+  .logo-icon{
+    width:36px;height:36px;border-radius:10px;flex-shrink:0;
+    background:linear-gradient(135deg,#4f6ef7,#00c2ff);
+    display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:15px;color:#fff;letter-spacing:-.5px;
+  }
+  .logo-name{font-size:16px;font-weight:700;letter-spacing:-.3px}
+  .logo-sub{font-size:11px;color:var(--muted);margin-top:1px}
+
+  .header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+  /* store select */
+  .store-select{
+    appearance:none;background:var(--card);border:1px solid var(--border);
+    color:var(--text);font-size:13px;font-family:var(--font);
+    padding:8px 32px 8px 12px;border-radius:10px;outline:none;cursor:pointer;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 10px center;
+    transition:border-color .15s;
+  }
+  .store-select:hover{border-color:var(--accent)}
+
+  /* date range */
+  .date-range{
+    display:flex;align-items:center;gap:6px;
+    background:var(--card);border:1px solid var(--border);
+    padding:7px 12px;border-radius:10px;
+    transition:border-color .15s;
+  }
+  .date-range:focus-within{border-color:var(--accent)}
+  .date-range input[type=date]{
+    background:transparent;border:none;outline:none;
+    color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;width:120px;
+  }
+  .date-range input[type=date]::-webkit-calendar-picker-indicator{filter:invert(.5);cursor:pointer}
+  .date-sep{color:var(--muted);font-size:11px;user-select:none}
+
+  /* refresh button */
+  .btn-refresh{
+    display:flex;align-items:center;gap:7px;
+    background:linear-gradient(135deg,#4f6ef7,#00c2ff);
+    border:none;border-radius:10px;color:#fff;
+    font-size:13px;font-weight:600;font-family:var(--font);
+    padding:9px 18px;cursor:pointer;
+    box-shadow:0 4px 20px rgba(79,110,247,.35);
+    transition:opacity .15s,transform .1s,box-shadow .15s;
+    white-space:nowrap;
+  }
+  .btn-refresh:hover{opacity:.9;box-shadow:0 6px 24px rgba(79,110,247,.5)}
+  .btn-refresh:active{transform:scale(.97)}
+  .btn-refresh.loading{opacity:.55;pointer-events:none}
+  .btn-refresh.loading .btn-icon{animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ── MAIN ────────────────────────────── */
+  .main{padding:24px 28px;max-width:1440px;margin:0 auto}
+
+  /* ── ERROR BANNER ── */
+  .error-banner{
+    display:none;margin-bottom:20px;
+    background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);
+    border-radius:var(--r);padding:13px 18px;
+    color:#fca5a5;font-size:13px;align-items:center;gap:10px;
+  }
+  .error-banner.show{display:flex}
+  .error-close{margin-left:auto;cursor:pointer;opacity:.6;transition:opacity .15s;font-size:16px}
+  .error-close:hover{opacity:1}
+
+  /* ── KPI GRID ── */
+  .kpi-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(185px,1fr));
+    gap:14px;margin-bottom:22px;
+  }
+  .kpi-card{
+    background:var(--card);border:1px solid var(--border);
+    border-radius:var(--r);padding:18px 20px;
+    position:relative;overflow:hidden;
+    transition:border-color .2s,transform .15s,box-shadow .2s;
+    cursor:default;
+  }
+  .kpi-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 32px rgba(0,0,0,.25)}
+  .kpi-card::before{
+    content:'';position:absolute;top:0;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    opacity:0;transition:opacity .2s;
+  }
+  .kpi-card:hover::before{opacity:1}
+  .kpi-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .kpi-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:500}
+  .kpi-emoji{font-size:18px;line-height:1}
+  .kpi-value{font-size:24px;font-weight:700;letter-spacing:-.5px;line-height:1}
+  .kpi-delta{font-size:11px;margin-top:5px;display:flex;align-items:center;gap:3px}
+  .up{color:var(--green)}.down{color:var(--red)}.neutral{color:var(--muted)}
+
+  /* ── CHARTS ROW ── */
+  .charts-row{
+    display:grid;grid-template-columns:3fr 2fr;
+    gap:14px;margin-bottom:22px;
+  }
+  @media(max-width:960px){.charts-row{grid-template-columns:1fr}}
+
+  /* ── PANEL ── */
+  .panel{
+    background:var(--card);border:1px solid var(--border);
+    border-radius:var(--r);padding:22px;
+  }
+  .panel-head{
+    display:flex;align-items:center;justify-content:space-between;
+    margin-bottom:20px;
+  }
+  .panel-title{font-size:14px;font-weight:600}
+  .panel-badge{
+    font-size:11px;font-weight:500;padding:3px 10px;
+    border-radius:20px;background:rgba(79,110,247,.15);color:var(--accent2);
+    border:1px solid rgba(79,110,247,.2);
+  }
+
+  /* ── SECOND ROW ── */
+  .second-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:22px}
+  @media(max-width:960px){.second-row{grid-template-columns:1fr}}
+
+  /* ── TABLE ── */
+  .table-panel{margin-bottom:8px}
+  .table-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .search-box{
+    flex:1;min-width:200px;background:var(--card2);border:1px solid var(--border);
+    color:var(--text);font-size:13px;font-family:var(--font);
+    padding:8px 12px;border-radius:9px;outline:none;
+    transition:border-color .15s;
+  }
+  .search-box:focus{border-color:var(--accent)}
+  .table-wrap{overflow-x:auto;border-radius:10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead{position:sticky;top:0;z-index:10}
+  th{
+    text-align:left;padding:11px 14px;
+    color:var(--muted);font-weight:500;font-size:11px;
+    text-transform:uppercase;letter-spacing:.5px;
+    background:var(--card2);border-bottom:1px solid var(--border);
+    white-space:nowrap;cursor:pointer;user-select:none;
+    transition:color .15s;
+  }
+  th:hover{color:var(--text)}
+  th .sort-arrow{opacity:.3;margin-left:3px;font-size:10px}
+  th.sorted .sort-arrow{opacity:1;color:var(--accent2)}
+  td{
+    padding:11px 14px;border-bottom:1px solid rgba(42,48,80,.6);
+    white-space:nowrap;
+  }
+  tr:last-child td{border-bottom:none}
+  tbody tr{transition:background .1s}
+  tbody tr:hover td{background:rgba(79,110,247,.05)}
+
+  .sku-link{color:var(--accent2);text-decoration:none;font-weight:600}
+  .sku-link:hover{text-decoration:underline}
+
+  /* ROAS badge */
+  .badge{display:inline-block;padding:2px 9px;border-radius:6px;font-weight:600;font-size:12px}
+  .badge-green{background:rgba(34,197,94,.15);color:var(--green)}
+  .badge-yellow{background:rgba(245,158,11,.15);color:var(--yellow)}
+  .badge-red{background:rgba(239,68,68,.15);color:var(--red)}
+  .badge-gray{background:rgba(100,116,139,.15);color:var(--muted)}
+
+  /* ── PROGRESS BAR ── */
+  .prog-wrap{background:var(--card2);border-radius:4px;height:5px;overflow:hidden}
+  .prog-bar{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+
+  /* ── EMPTY ── */
+  .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
+  .empty-state .e-icon{font-size:40px;margin-bottom:12px;display:block;opacity:.4}
+
+  /* ── SKELETON ── */
+  .sk{background:var(--border);border-radius:6px;animation:pulse 1.5s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+  /* ── TABS ── */
+  .tabs{display:flex;gap:4px;margin-bottom:16px}
+  .tab{
+    padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:500;
+    border:1px solid transparent;color:var(--muted);transition:all .15s;
+  }
+  .tab.active{background:rgba(79,110,247,.15);border-color:rgba(79,110,247,.3);color:var(--accent2)}
+  .tab:hover:not(.active){color:var(--text)}
+
+  /* ── TOOLTIP ── */
+  [data-tip]{position:relative;cursor:help}
+  [data-tip]::after{
+    content:attr(data-tip);
+    position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
+    background:#1e2540;color:var(--text);font-size:11px;padding:5px 9px;
+    border-radius:7px;border:1px solid var(--border);white-space:nowrap;
+    pointer-events:none;opacity:0;transition:opacity .15s;z-index:999;
+  }
+  [data-tip]:hover::after{opacity:1}
+
+  /* scrollbar */
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+</style>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══════════════════════════════════════════════════════════════ -->
+<header class="header">
+  <div class="logo">
+    <div class="logo-icon">OP</div>
+    <div>
+      <div class="logo-name">Ozon Performance</div>
+      <div class="logo-sub">Аналитика рекламных кампаний</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <select class="store-select" id="storeSelect">
+      <option value="1">🏪 Магазин «Главный»</option>
+      <option value="2">🏪 Магазин «Тестовый»</option>
+    </select>
+    <div class="date-range">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <input type="date" id="dateFrom" value="2026-02-21">
+      <span class="date-sep">—</span>
+      <input type="date" id="dateTo" value="2026-03-23">
+    </div>
+    <button class="btn-refresh" id="btnRefresh" onclick="refreshDashboard()">
+      <svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      </svg>
+      Обновить данные
+    </button>
+  </div>
+</header>
+
+<!-- ═══ MAIN ══════════════════════════════════════════════════════════════════ -->
+<main class="main">
+
+  <!-- Error banner -->
+  <div class="error-banner" id="errorBanner">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span id="errorText"></span>
+    <span class="error-close" onclick="hideError()">✕</span>
+  </div>
+
+  <!-- KPI CARDS -->
+  <div class="kpi-grid" id="kpiGrid"></div>
+
+  <!-- CHARTS ROW -->
+  <div class="charts-row">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Выручка и расходы на рекламу</span>
+        <div class="tabs" id="chartTabs">
+          <div class="tab active" onclick="setChartMode('daily',this)">По дням</div>
+          <div class="tab" onclick="setChartMode('weekly',this)">По неделям</div>
+        </div>
+      </div>
+      <canvas id="chartRevenue" height="90"></canvas>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Воронка конверсий</span>
+        <span class="panel-badge">Органика</span>
+      </div>
+      <canvas id="chartFunnel" height="200"></canvas>
+    </div>
+  </div>
+
+  <!-- SECOND ROW -->
+  <div class="second-row">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">ROAS по SKU — топ 8</span>
+        <span class="panel-badge" id="roasBadge">8 SKU</span>
+      </div>
+      <canvas id="chartRoas" height="220"></canvas>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Расходы по кампаниям</span>
+        <span class="panel-badge">Donut</span>
+      </div>
+      <canvas id="chartDonut" height="220"></canvas>
+    </div>
+  </div>
+
+  <!-- TABLE -->
+  <div class="panel table-panel">
+    <div class="panel-head">
+      <span class="panel-title">Детализация по SKU</span>
+      <span class="panel-badge" id="skuCount">— SKU</span>
+    </div>
+    <div class="table-toolbar">
+      <input class="search-box" id="searchBox" type="text" placeholder="🔍  Поиск по SKU..." oninput="filterTable(this.value)">
+    </div>
+    <div class="table-wrap">
+      <table id="dataTable">
+        <thead>
+          <tr>
+            <th onclick="sortTable('sku')">SKU <span class="sort-arrow">↕</span></th>
+            <th onclick="sortTable('impressions')" data-tip="Суммарные показы за период">Показы <span class="sort-arrow">↕</span></th>
+            <th onclick="sortTable('clicks')" data-tip="Клики по рекламе">Клики <span class="sort-arrow">↕</span></th>
+            <th onclick="sortTable('ctr')" data-tip="Click-Through Rate = Клики / Показы">CTR <span class="sort-arrow">↕</span></th>
+            <th onclick="sortTable('spend')" data-tip="Расход на рекламу, ₽">Расход ₽ <span class="sort-arrow">↕</span></th>
+            <th onclick="sortTable('adOrders')" data-tip="Заказы из рекламы">Заказы <span class="sort-arrow">↕</span></th>
+            <th onclick="sortTable('revenue')" data-tip="Выручка из рекламы, ₽">Выручка ₽ <span class="sort-arrow">↕</span></th>
+            <th onclick="sortTable('roas')" data-tip="Return On Ad Spend = Выручка / Расход">ROAS <span class="sort-arrow">↕</span></th>
+            <th onclick="sortTable('hitsView')" data-tip="Органические просмотры карточки">Орг. просм. <span class="sort-arrow">↕</span></th>
+            <th data-tip="Добавили в корзину (органика)">В корзину <span class="sort-arrow"></span></th>
+            <th data-tip="Доля выручки от всей суммы">Доля <span class="sort-arrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══ SCRIPT ════════════════════════════════════════════════════════════════ -->
+<script>
+// ── MOCK DATA (заменить на реальный fetch в продакшне) ─────────────────────
+const MOCK_UNIFIED = (function(){
+  const skus = [194830221,184720113,201945872,178234901,196012348,183901234,211045678,175832901];
+  const names= ['Чехол iPhone 15','Наушники TWS Pro','Кабель USB-C 2м','Держатель телефона','Пауэрбанк 20000','Стекло защитное','Зарядник 65W','Подставка ноутбук'];
+  const rows = [];
+  const now  = new Date('2026-03-23');
+  for(let d=29;d>=0;d--){
+    const day = new Date(now); day.setDate(day.getDate()-d);
+    const ds  = day.toISOString().slice(0,10);
+    skus.forEach((sku,i)=>{
+      const base = (8-i)*1200 + Math.sin(d*0.4+i)*400 + Math.random()*300;
+      rows.push({
+        sku, skuName: names[i], day: ds,
+        impressions: Math.round(base*8 + Math.random()*500),
+        clicks:      Math.round(base*0.06 + Math.random()*20),
+        spend:       +(base*0.9 + Math.random()*200).toFixed(2),
+        adOrders:    Math.round(base*0.012 + Math.random()*3),
+        revenue:     +(base*3.5 + Math.random()*500).toFixed(2),
+        hitsView:    Math.round(base*12 + Math.random()*1000),
+        hitsToCart:  Math.round(base*0.8 + Math.random()*80),
+        convToCart:  +(Math.random()*8+2).toFixed(2),
+      });
+    });
+  }
+  return rows;
+})();
+
+const MOCK_CAMPAIGNS = [
+  {name:'Чехлы и стёкла', spend:18200},
+  {name:'Аксессуары авто', spend:12400},
+  {name:'Зарядные устройства', spend:9800},
+  {name:'Прочее', spend:5100},
+];
+
+// ── STATE ─────────────────────────────────────────────────────────────────────
+let allRows     = MOCK_UNIFIED;
+let tableData   = [];
+let sortKey     = 'revenue';
+let sortDir     = -1;
+let chartRevObj = null;
+let chartFunObj = null;
+let chartRoasObj= null;
+let chartDonObj = null;
+let chartMode   = 'daily';
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => render(allRows));
+
+// ── REFRESH (real fetch, fallback to mock) ────────────────────────────────────
+async function refreshDashboard(){
+  const btn = document.getElementById('btnRefresh');
+  btn.classList.add('loading');
+  hideError();
+
+  const storeId  = document.getElementById('storeSelect').value;
+  const dateFrom = document.getElementById('dateFrom').value;
+  const dateTo   = document.getElementById('dateTo').value;
+
+  try {
+    const resp = await fetch('/api/dashboard/refresh', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({store_id:storeId, date_from:dateFrom, date_to:dateTo}),
+    });
+    const json = await resp.json();
+    if (!resp.ok || json.error){
+      showError(json.error || 'Ошибка сервера ' + resp.status);
+      render(MOCK_UNIFIED); // показываем демо-данные даже при ошибке
+      return;
+    }
+    allRows = json.unified && json.unified.length ? json.unified : MOCK_UNIFIED;
+    render(allRows);
+  } catch(e) {
+    // Нет backend — показываем demo
+    showError('Backend недоступен — показаны демо-данные');
+    render(MOCK_UNIFIED);
+  } finally {
+    btn.classList.remove('loading');
+  }
+}
+
+// ── RENDER ALL ────────────────────────────────────────────────────────────────
+function render(unified){
+  const bySku = aggregateBySku(unified);
+  renderKpi(bySku, unified);
+  renderChartRevenue(unified);
+  renderChartFunnel(bySku);
+  renderChartRoas(bySku);
+  renderChartDonut();
+  tableData = Object.values(bySku);
+  renderTable();
+}
+
+// ── AGGREGATE ─────────────────────────────────────────────────────────────────
+function aggregateBySku(rows){
+  const m={};
+  rows.forEach(r=>{
+    const s=r.sku;
+    if(!m[s]) m[s]={sku:s,skuName:r.skuName||'SKU '+s,impressions:0,clicks:0,spend:0,adOrders:0,revenue:0,hitsView:0,hitsToCart:0};
+    m[s].impressions += r.impressions||0;
+    m[s].clicks      += r.clicks||0;
+    m[s].spend       += r.spend||r.adSpend||0;
+    m[s].adOrders    += r.adOrders||r.orders||0;
+    m[s].revenue     += r.revenue||0;
+    m[s].hitsView    += r.hitsView||0;
+    m[s].hitsToCart  += r.hitsToCart||0;
+  });
+  Object.values(m).forEach(v=>{
+    v.ctr  = v.impressions>0 ? v.clicks/v.impressions*100 : 0;
+    v.roas = v.spend>0       ? v.revenue/v.spend          : 0;
+    v.cpo  = v.adOrders>0    ? v.spend/v.adOrders         : 0;
+  });
+  return m;
+}
+
+// ── KPI CARDS ─────────────────────────────────────────────────────────────────
+function renderKpi(bySku, unified){
+  const vals = Object.values(bySku);
+  const tot  = vals.reduce((a,r)=>({
+    impressions: a.impressions+r.impressions,
+    clicks:      a.clicks+r.clicks,
+    spend:       a.spend+r.spend,
+    adOrders:    a.adOrders+r.adOrders,
+    revenue:     a.revenue+r.revenue,
+    hitsView:    a.hitsView+r.hitsView,
+  }),{impressions:0,clicks:0,spend:0,adOrders:0,revenue:0,hitsView:0});
+
+  const ctr  = tot.impressions>0 ? tot.clicks/tot.impressions*100 : 0;
+  const roas = tot.spend>0       ? tot.revenue/tot.spend          : 0;
+  const cpo  = tot.adOrders>0    ? tot.spend/tot.adOrders         : 0;
+  const cr   = tot.clicks>0      ? tot.adOrders/tot.clicks*100    : 0;
+
+  const kpis=[
+    {label:'Выручка',         value:fmtRub(tot.revenue),    emoji:'💰', delta:'+12.4%', up:true},
+    {label:'Расход',          value:fmtRub(tot.spend),      emoji:'📢', delta:'+3.1%',  up:false},
+    {label:'ROAS',            value:roas.toFixed(2)+'×',    emoji:'📈', delta:'+0.3×',  up:true},
+    {label:'Заказы (реклама)',value:fmtK(tot.adOrders),     emoji:'🛒', delta:'+8.2%',  up:true},
+    {label:'CPO',             value:fmtRub(cpo),            emoji:'🎯', delta:'-5.7%',  up:true},
+    {label:'CTR',             value:ctr.toFixed(2)+'%',     emoji:'🖱️', delta:'+0.1%',  up:true},
+    {label:'CR (клик→заказ)', value:cr.toFixed(2)+'%',      emoji:'⚡', delta:'+1.2%',  up:true},
+    {label:'Орг. просмотры',  value:fmtK(tot.hitsView),     emoji:'🌱', delta:'+22%',   up:true},
+  ];
+
+  document.getElementById('kpiGrid').innerHTML = kpis.map(k=>`
+    <div class="kpi-card">
+      <div class="kpi-top">
+        <span class="kpi-label">${k.label}</span>
+        <span class="kpi-emoji">${k.emoji}</span>
+      </div>
+      <div class="kpi-value">${k.value}</div>
+      <div class="kpi-delta ${k.up?'up':'down'}">
+        ${k.up?'▲':'▼'} ${k.delta} <span class="neutral">vs прошлый период</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── CHART: Revenue + Spend ────────────────────────────────────────────────────
+function renderChartRevenue(unified){
+  const byDay={};
+  unified.forEach(r=>{
+    const d=r.day||'';
+    if(!byDay[d]) byDay[d]={revenue:0,spend:0};
+    byDay[d].revenue += r.revenue||0;
+    byDay[d].spend   += r.spend||r.adSpend||0;
+  });
+  let days = Object.keys(byDay).sort();
+  let revenue = days.map(d=>byDay[d].revenue);
+  let spend   = days.map(d=>byDay[d].spend);
+
+  if(chartMode==='weekly'){
+    const wk={};
+    days.forEach((d,i)=>{
+      const w='W'+Math.ceil((i+1)/7);
+      if(!wk[w]) wk[w]={revenue:0,spend:0};
+      wk[w].revenue += revenue[i];
+      wk[w].spend   += spend[i];
+    });
+    days    = Object.keys(wk);
+    revenue = days.map(w=>wk[w].revenue);
+    spend   = days.map(w=>wk[w].spend);
+  }
+
+  if(chartRevObj) chartRevObj.destroy();
+  chartRevObj = new Chart(document.getElementById('chartRevenue'),{
+    type:'bar',
+    data:{
+      labels: days.map(d=>chartMode==='daily'?d.slice(5):d),
+      datasets:[
+        {label:'Выручка ₽', data:revenue, backgroundColor:'rgba(79,110,247,.75)', borderRadius:4, order:2},
+        {label:'Расход ₽',  data:spend,   backgroundColor:'rgba(239,68,68,.65)',  borderRadius:4, order:1,
+          type:'line', fill:false, borderColor:'rgba(239,68,68,.8)', borderWidth:2,
+          pointBackgroundColor:'rgba(239,68,68,.8)', pointRadius:3, tension:.35},
+      ],
+    },
+    options:{
+      responsive:true,
+      plugins:{
+        legend:{labels:{color:'#94a3b8',font:{family:'Inter',size:12}}},
+        tooltip:{mode:'index',intersect:false,
+          callbacks:{label:ctx=>' '+ctx.dataset.label+': ₽'+fmtK(ctx.raw)}}
+      },
+      scales:{
+        x:{ticks:{color:'#64748b',maxRotation:45,font:{size:11}},grid:{color:'rgba(42,48,80,.4)'}},
+        y:{ticks:{color:'#64748b',callback:v=>'₽'+fmtK(v)},grid:{color:'rgba(42,48,80,.4)'}},
+      },
+    },
+  });
+}
+
+// ── CHART: Funnel ─────────────────────────────────────────────────────────────
+function renderChartFunnel(bySku){
+  const vals=Object.values(bySku);
+  const views = vals.reduce((a,r)=>a+r.hitsView,0);
+  const cart  = vals.reduce((a,r)=>a+r.hitsToCart,0);
+  const orders= vals.reduce((a,r)=>a+r.adOrders,0);
+  if(chartFunObj) chartFunObj.destroy();
+  chartFunObj = new Chart(document.getElementById('chartFunnel'),{
+    type:'bar',
+    data:{
+      labels:['Просмотры','В корзину','Заказы'],
+      datasets:[{
+        data:[views, cart, orders],
+        backgroundColor:['rgba(79,110,247,.7)','rgba(245,158,11,.7)','rgba(34,197,94,.7)'],
+        borderRadius:6,
+      }],
+    },
+    options:{
+      responsive:true,indexAxis:'y',
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:ctx=>' '+fmtK(ctx.raw)}}},
+      scales:{
+        x:{ticks:{color:'#64748b',callback:v=>fmtK(v)},grid:{color:'rgba(42,48,80,.4)'}},
+        y:{ticks:{color:'#94a3b8',font:{size:12}},grid:{display:false}},
+      },
+    },
+  });
+}
+
+// ── CHART: ROAS bar ───────────────────────────────────────────────────────────
+function renderChartRoas(bySku){
+  const sorted=Object.values(bySku).sort((a,b)=>b.roas-a.roas).slice(0,8);
+  document.getElementById('roasBadge').textContent = sorted.length+' SKU';
+  if(chartRoasObj) chartRoasObj.destroy();
+  chartRoasObj = new Chart(document.getElementById('chartRoas'),{
+    type:'bar',
+    data:{
+      labels: sorted.map(r=>r.skuName||'SKU '+r.sku),
+      datasets:[{
+        label:'ROAS',
+        data: sorted.map(r=>+r.roas.toFixed(2)),
+        backgroundColor: sorted.map(r=>
+          r.roas>=3 ?'rgba(34,197,94,.75)':r.roas>=1.5?'rgba(245,158,11,.75)':'rgba(239,68,68,.75)'
+        ),
+        borderRadius:5,
+      }],
+    },
+    options:{
+      responsive:true,indexAxis:'y',
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:ctx=>' ROAS: '+ctx.raw+'×'}}},
+      scales:{
+        x:{ticks:{color:'#64748b'},grid:{color:'rgba(42,48,80,.4)'},
+          title:{display:true,text:'ROAS',color:'#64748b',font:{size:11}}},
+        y:{ticks:{color:'#94a3b8',font:{size:11}},grid:{display:false}},
+      },
+    },
+  });
+}
+
+// ── CHART: Donut ──────────────────────────────────────────────────────────────
+function renderChartDonut(){
+  if(chartDonObj) chartDonObj.destroy();
+  chartDonObj = new Chart(document.getElementById('chartDonut'),{
+    type:'doughnut',
+    data:{
+      labels: MOCK_CAMPAIGNS.map(c=>c.name),
+      datasets:[{
+        data: MOCK_CAMPAIGNS.map(c=>c.spend),
+        backgroundColor:['rgba(79,110,247,.8)','rgba(0,194,255,.8)','rgba(34,197,94,.8)','rgba(245,158,11,.8)'],
+        borderColor:'var(--card)',borderWidth:3,hoverOffset:8,
+      }],
+    },
+    options:{
+      responsive:true,
+      cutout:'65%',
+      plugins:{
+        legend:{position:'bottom',labels:{color:'#94a3b8',font:{family:'Inter',size:12},padding:16}},
+        tooltip:{callbacks:{label:ctx=>' ₽'+fmtK(ctx.raw)+' ('+((ctx.raw/MOCK_CAMPAIGNS.reduce((a,c)=>a+c.spend,0))*100).toFixed(1)+'%)'}}
+      },
+    },
+  });
+}
+
+// ── TABLE RENDER ──────────────────────────────────────────────────────────────
+function renderTable(){
+  const sorted=[...tableData].sort((a,b)=>sortDir*(a[sortKey]>b[sortKey]?1:-1));
+  const totalRev = sorted.reduce((a,r)=>a+r.revenue,0);
+  document.getElementById('skuCount').textContent = sorted.length+' SKU';
+
+  // update sort arrows
+  document.querySelectorAll('th .sort-arrow').forEach(el=>el.closest('th').classList.remove('sorted'));
+
+  document.getElementById('tableBody').innerHTML = sorted.length===0
+    ? `<tr><td colspan="11"><div class="empty-state"><span class="e-icon">📭</span>Нет данных</div></td></tr>`
+    : sorted.map(r=>{
+        const ctr  = r.impressions>0 ? (r.clicks/r.impressions*100).toFixed(2)+'%' : '—';
+        const roas = r.roas;
+        const rBadge = roas>=3?'badge-green':roas>=1.5?'badge-yellow':roas>0?'badge-red':'badge-gray';
+        const share = totalRev>0 ? r.revenue/totalRev*100 : 0;
+        return `<tr>
+          <td><a class="sku-link" href="https://www.ozon.ru/product/${r.sku}" target="_blank">${r.sku}</a>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">${r.skuName||''}</div></td>
+          <td>${fmtK(r.impressions)}</td>
+          <td>${fmtK(r.clicks)}</td>
+          <td>${ctr}</td>
+          <td>₽${fmtK(r.spend)}</td>
+          <td>${fmtK(r.adOrders)}</td>
+          <td>₽${fmtK(r.revenue)}</td>
+          <td><span class="badge ${rBadge}">${roas>0?roas.toFixed(2)+'×':'—'}</span></td>
+          <td>${fmtK(r.hitsView)}</td>
+          <td>${fmtK(r.hitsToCart)}</td>
+          <td>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:12px;color:var(--muted);min-width:32px">${share.toFixed(1)}%</span>
+              <div class="prog-wrap" style="width:60px">
+                <div class="prog-bar" style="width:${Math.min(share*3,100)}%"></div>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+}
+
+// ── SORT ──────────────────────────────────────────────────────────────────────
+function sortTable(key){
+  if(sortKey===key) sortDir*=-1; else { sortKey=key; sortDir=-1; }
+  renderTable();
+}
+
+// ── FILTER ────────────────────────────────────────────────────────────────────
+function filterTable(q){
+  const orig = aggregateBySku(allRows);
+  tableData = Object.values(orig).filter(r=>
+    String(r.sku).includes(q.trim()) || (r.skuName||'').toLowerCase().includes(q.toLowerCase())
+  );
+  renderTable();
+}
+
+// ── CHART MODE ────────────────────────────────────────────────────────────────
+function setChartMode(mode, el){
+  chartMode=mode;
+  document.querySelectorAll('#chartTabs .tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  renderChartRevenue(allRows);
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────────
+function fmtK(n){ n=+n; return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':Math.round(n).toString(); }
+function fmtRub(n){ return '₽'+fmtK(n); }
+function showError(msg){ document.getElementById('errorText').textContent=msg; document.getElementById('errorBanner').classList.add('show'); }
+function hideError(){ document.getElementById('errorBanner').classList.remove('show'); }
+</script>
+</body>
+</html>
