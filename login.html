@@ -235,7 +235,7 @@ async function submitForm(e, type){
   }
 
   try {
-    const { resp, data: json } = await requestJson('/' + type, {
+    const { resp, data: json } = await requestJson(type, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({email, password}),

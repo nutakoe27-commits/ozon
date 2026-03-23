@@ -409,7 +409,7 @@ window.addEventListener('DOMContentLoaded', () => loadStores());
 async function loadStores(){
   const select = document.getElementById('storeSelect');
   try {
-    const { resp, data: json } = await requestJson('/api/stores');
+    const { resp, data: json } = await requestJson('api/stores');
     if (!resp.ok || !Array.isArray(json.stores)) throw new Error(json.error || 'Не удалось загрузить магазины');
     if (json.stores.length === 0) {
       select.innerHTML = '<option value="">🏪 Нет магазинов</option>';
@@ -435,7 +435,7 @@ async function addStore(){
     return;
   }
   try{
-    const { resp, data: json } = await requestJson('/api/stores', {
+    const { resp, data: json } = await requestJson('api/stores', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name, performance_client_id, performance_client_secret, seller_client_id, seller_api_key}),
@@ -458,7 +458,7 @@ async function refreshDashboard(){
   const dateTo   = document.getElementById('dateTo').value;
 
   try {
-    const { resp, data: json } = await requestJson('/api/dashboard/refresh', {
+    const { resp, data: json } = await requestJson('api/dashboard/refresh', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({store_id:storeId, date_from:dateFrom, date_to:dateTo}),
@@ -773,7 +773,7 @@ async function requestJson(url, options = {}){
   }
 
   if (resp.status === 401) {
-    window.location.href = '/login';
+    window.location.href = 'login';
   }
 
   return { resp, data };

@@ -62,7 +62,7 @@ if ($userId === null) {
         exit;
     }
     // Всё остальное → редирект на логин
-    header('Location: /login');
+    header('Location: login');
     exit;
 }
 
