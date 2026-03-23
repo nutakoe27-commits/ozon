@@ -82,3 +82,7 @@ php bin/run.php
 - `POST /v1/analytics/data`
 - `POST /v1/analytics/product-queries`
 - `POST /v1/finance/realization/by-day`
+
+## Troubleshooting
+
+- `HTTP 404 ... campaign not found` при загрузке товаров кампании теперь обрабатывается безопасно: такие кампании автоматически пропускаются (часто это удалённые/чужие/недоступные в токене кампании).

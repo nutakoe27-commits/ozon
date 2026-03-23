@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ozon\Service;
 
 use Ozon\Http\HttpClient;
+use RuntimeException;
 
 final class ProductService
 {
@@ -20,14 +21,29 @@ final class ProductService
     {
         $campaignId = (int)$campaignId;
 
-        $firstTry = $this->performanceClient->get('/api/client/campaign/' . $campaignId . '/objects');
-        $records = isset($firstTry['items']) ? $firstTry['items'] : (isset($firstTry['products']) ? $firstTry['products'] : (isset($firstTry['result']) ? $firstTry['result'] : array()));
+        try {
+            $firstTry = $this->performanceClient->get('/api/client/campaign/' . $campaignId . '/objects');
+        } catch (RuntimeException $e) {
+            if ($this->isCampaignNotFound($e)) {
+                return array();
+            }
+            throw $e;
+        }
 
+        $records = isset($firstTry['items']) ? $firstTry['items'] : (isset($firstTry['products']) ? $firstTry['products'] : (isset($firstTry['result']) ? $firstTry['result'] : array()));
         if (is_array($records) && count($records) > 0) {
             return $this->mapProducts($campaignId, $records);
         }
 
-        $fallback = $this->performanceClient->get('/api/client/campaign/' . $campaignId . '/v2/products');
+        try {
+            $fallback = $this->performanceClient->get('/api/client/campaign/' . $campaignId . '/v2/products');
+        } catch (RuntimeException $e) {
+            if ($this->isCampaignNotFound($e)) {
+                return array();
+            }
+            throw $e;
+        }
+
         $fallbackRecords = isset($fallback['items']) ? $fallback['items'] : (isset($fallback['products']) ? $fallback['products'] : (isset($fallback['result']) ? $fallback['result'] : array()));
 
         return $this->mapProducts($campaignId, is_array($fallbackRecords) ? $fallbackRecords : array());
@@ -67,5 +83,11 @@ final class ProductService
         }
 
         return null;
+    }
+
+    private function isCampaignNotFound(RuntimeException $e)
+    {
+        $message = strtolower($e->getMessage());
+        return strpos($message, 'http 404') !== false && strpos($message, 'campaign not found') !== false;
     }
 }

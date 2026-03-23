@@ -52,8 +52,19 @@ final class OzonDashboardPipeline
         }
 
         $productsByCampaign = array();
+        $validCampaignIds = array();
         foreach ($campaignIds as $campaignId) {
-            $productsByCampaign = array_merge($productsByCampaign, $this->productService->getCampaignProducts($campaignId));
+            $products = $this->productService->getCampaignProducts($campaignId);
+            if (count($products) === 0) {
+                continue;
+            }
+
+            $validCampaignIds[] = $campaignId;
+            $productsByCampaign = array_merge($productsByCampaign, $products);
+        }
+
+        if (count($validCampaignIds) === 0) {
+            return array('promotedSkus' => array(), 'unified' => array());
         }
 
         $promotedSkus = array();
@@ -65,7 +76,7 @@ final class OzonDashboardPipeline
         $promotedSkus = array_values(array_unique($promotedSkus));
 
         $adStats = array();
-        foreach (array_chunk($campaignIds, 10) as $chunk) {
+        foreach (array_chunk($validCampaignIds, 10) as $chunk) {
             $adStats = array_merge($adStats, $this->statisticsService->getProductsStatistics($chunk, $dateFrom, $dateTo));
             $adStats = array_merge($adStats, $this->statisticsService->getOrdersStatistics($chunk, $dateFrom, $dateTo));
         }
