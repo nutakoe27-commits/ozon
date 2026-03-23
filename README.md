@@ -84,3 +84,16 @@ Whenever response schema details are uncertain, code intentionally marks it with
 ```
 
 So the implementation does not invent undocumented fields silently.
+
+## Troubleshooting: Pages opens README instead of dashboard
+
+If your GitHub Pages URL opens README, repository is usually publishing from branch root where no `index.html` existed. This repo now includes root `index.html` redirecting to `docs/`.
+
+Recommended settings:
+
+1. **Settings → Pages → Build and deployment**
+2. **Source: GitHub Actions** (recommended with this repository)
+3. Ensure workflow `.github/workflows/deploy-pages.yml` completed successfully.
+
+Fallback option:
+- Set Source to **Deploy from a branch**, branch `work` (or your default), folder `/docs`.
