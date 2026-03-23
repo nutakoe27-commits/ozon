@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import { loadConfig } from "./config.js";
 import { HttpClient } from "./http.js";
 import { PerformanceAuthService } from "./services/auth.service.js";
@@ -38,13 +39,16 @@ async function main(): Promise<void> {
     new CampaignService(performanceClient),
     new ProductService(performanceClient),
     new StatisticsService(performanceClient),
-    new AnalyticsService(sellerClient)
+    new AnalyticsService(sellerClient, config.seller.analyticsRequestIntervalMs)
   );
 
   const result = await pipeline.run({
     dateFrom: config.period.dateFrom,
     dateTo: config.period.dateTo
   });
+
+  await mkdir("docs/data", { recursive: true });
+  await writeFile("docs/data/unified.json", JSON.stringify(result, null, 2), "utf8");
 
   console.log(JSON.stringify(result, null, 2));
 }

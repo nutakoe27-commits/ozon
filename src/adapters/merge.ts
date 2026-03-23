@@ -1,7 +1,7 @@
 import type { AdStatsBySkuDay, AnalyticsBySkuDay, UnifiedProductDay } from "../types.js";
 
 export function mapPerformanceToInternal(rows: AdStatsBySkuDay[]): AdStatsBySkuDay[] {
-  return rows;
+  return aggregateAdStats(rows);
 }
 
 export function mapAnalyticsToInternal(rows: AnalyticsBySkuDay[]): AnalyticsBySkuDay[] {
@@ -11,6 +11,32 @@ export function mapAnalyticsToInternal(rows: AnalyticsBySkuDay[]): AnalyticsBySk
 function safeDivide(a: number, b: number): number {
   if (b === 0) return 0;
   return a / b;
+}
+
+export function aggregateAdStats(rows: AdStatsBySkuDay[]): AdStatsBySkuDay[] {
+  const acc = new Map<string, AdStatsBySkuDay>();
+
+  for (const row of rows) {
+    const key = `${row.sku}:${row.day}`;
+    const prev = acc.get(key);
+
+    if (!prev) {
+      acc.set(key, { ...row });
+      continue;
+    }
+
+    acc.set(key, {
+      sku: row.sku,
+      day: row.day,
+      impressions: prev.impressions + row.impressions,
+      clicks: prev.clicks + row.clicks,
+      spend: prev.spend + row.spend,
+      orders: prev.orders + row.orders,
+      revenue: prev.revenue + row.revenue
+    });
+  }
+
+  return [...acc.values()];
 }
 
 export function mergeBySku(adRows: AdStatsBySkuDay[], analyticsRows: AnalyticsBySkuDay[]): UnifiedProductDay[] {

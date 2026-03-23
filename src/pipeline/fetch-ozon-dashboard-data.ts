@@ -2,7 +2,7 @@ import { CampaignService } from "../services/campaign.service.js";
 import { ProductService } from "../services/product.service.js";
 import { StatisticsService } from "../services/statistics.service.js";
 import { AnalyticsService } from "../services/analytics.service.js";
-import type { DateRange, SKU, UnifiedProductDay } from "../types.js";
+import type { AdStatsBySkuDay, DateRange, SKU, UnifiedProductDay } from "../types.js";
 import { mapAnalyticsToInternal, mapPerformanceToInternal, mergeBySku } from "../adapters/merge.js";
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -25,12 +25,15 @@ export class OzonDashboardPipeline {
     const cpcCampaigns = await this.campaignService.getCpcCampaigns();
     const campaignIds = cpcCampaigns.map((c) => c.id);
 
-    const productsByCampaign = await Promise.all(campaignIds.map((id) => this.productService.getCampaignProducts(id)));
+    if (campaignIds.length === 0) {
+      return { promotedSkus: [], unified: [] };
+    }
 
+    const productsByCampaign = await Promise.all(campaignIds.map((id) => this.productService.getCampaignProducts(id)));
     const promotedSkus = [...new Set(productsByCampaign.flat().map((p) => p.sku))];
 
-    const adStatsProducts = [];
-    const adStatsOrders = [];
+    const adStatsProducts: AdStatsBySkuDay[] = [];
+    const adStatsOrders: AdStatsBySkuDay[] = [];
 
     for (const idsChunk of chunk(campaignIds, 10)) {
       // Performance API limit: up to 10 campaigns per request.
@@ -39,7 +42,6 @@ export class OzonDashboardPipeline {
     }
 
     const adStats = [...adStatsProducts, ...adStatsOrders];
-
     const analytics = await this.analyticsService.getAnalyticsBySkuDay(promotedSkus, period);
 
     const internalAd = mapPerformanceToInternal(adStats);

@@ -17,7 +17,8 @@ Production-ready TypeScript skeleton for integrating Ozon Performance API (ads) 
    - `POST /api/client/statistic/orders/generate`
    - Poll: `GET /api/client/statistics/{UUID}`
 5. **Seller analytics**
-   - `POST /v1/analytics/data`
+   - `POST /v1/analytics/data` with pagination (`limit=1000`, `offset += 1000`)
+   - 1 request/min rule supported via `OZON_ANALYTICS_REQUEST_INTERVAL_MS` (default: `60000`)
 6. **Optional additional endpoints (exposed in service)**
    - `POST /v1/analytics/product-queries`
    - `POST /v1/finance/realization/by-day`
@@ -31,9 +32,10 @@ Production-ready TypeScript skeleton for integrating Ozon Performance API (ads) 
 - `src/services/product.service.ts` — campaign products and SKU extraction
 - `src/services/statistics.service.ts` — report generation + polling + ad stats mapping
 - `src/services/analytics.service.ts` — Seller analytics / optional methods
-- `src/adapters/merge.ts` — mappers + merge by SKU + computed metrics
+- `src/adapters/merge.ts` — mappers + aggregate + merge by SKU + computed metrics
 - `src/pipeline/fetch-ozon-dashboard-data.ts` — full pipeline orchestration
-- `src/index.ts` — executable entrypoint
+- `src/index.ts` — executable entrypoint + exports `docs/data/unified.json`
+- `docs/index.html` — static dashboard page for GitHub Pages
 
 ## Environment variables
 
@@ -46,19 +48,32 @@ export OZON_SELLER_API_KEY="..."
 # Optional
 export OZON_PERFORMANCE_BASE_URL="https://api-performance.ozon.ru"
 export OZON_SELLER_BASE_URL="https://api-seller.ozon.ru"
+export OZON_ANALYTICS_REQUEST_INTERVAL_MS="60000"
 
-# Required period
+# Required period (<= 62 days)
 export OZON_DATE_FROM="2024-01-01"
 export OZON_DATE_TO="2024-01-31"
 ```
 
-## Run
+## Run pipeline
 
 ```bash
 npm install
 npm run build
 npm start
 ```
+
+After run, merged data is saved to:
+
+```text
+docs/data/unified.json
+```
+
+## GitHub Pages hosting
+
+- Static site lives in `docs/`.
+- Workflow `.github/workflows/deploy-pages.yml` deploys `docs/` to GitHub Pages.
+- Open `https://<username>.github.io/<repo>/` after Pages is enabled in repository settings.
 
 ## Notes about API doc gaps
 

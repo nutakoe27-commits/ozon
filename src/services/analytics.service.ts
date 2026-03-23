@@ -1,4 +1,4 @@
-import { HttpClient } from "../http.js";
+import { HttpClient, sleep } from "../http.js";
 import type { AnalyticsBySkuDay, DateRange, SKU } from "../types.js";
 
 interface AnalyticsDataResponse {
@@ -19,20 +19,39 @@ function normalizeNumber(value: unknown): number {
 }
 
 export class AnalyticsService {
-  constructor(private readonly sellerClient: HttpClient) {}
+  constructor(
+    private readonly sellerClient: HttpClient,
+    private readonly requestIntervalMs: number = 60_000
+  ) {}
 
   async getAnalyticsBySkuDay(skus: SKU[], period: DateRange): Promise<AnalyticsBySkuDay[]> {
-    const response = await this.sellerClient.post<AnalyticsDataResponse>("/v1/analytics/data", {
-      date_from: period.dateFrom,
-      date_to: period.dateTo,
-      metrics: ["revenue", "ordered_units", "hits_view", "hits_tocart", "session_view", "conv_tocart"],
-      dimension: ["sku", "day"],
-      filters: skus.length > 0 ? [{ key: "sku", operator: "IN", values: skus }] : [],
-      limit: 1000,
-      offset: 0
-    });
+    const limit = 1000;
+    let offset = 0;
+    const rows: Array<Record<string, unknown>> = [];
 
-    const rows = response.data ?? response.result ?? [];
+    while (true) {
+      const response = await this.sellerClient.post<AnalyticsDataResponse>("/v1/analytics/data", {
+        date_from: period.dateFrom,
+        date_to: period.dateTo,
+        metrics: ["revenue", "ordered_units", "hits_view", "hits_tocart", "session_view", "conv_tocart"],
+        dimension: ["sku", "day"],
+        filters: skus.length > 0 ? [{ key: "sku", operator: "IN", values: skus }] : [],
+        limit,
+        offset
+      });
+
+      const batch = response.data ?? response.result ?? [];
+      rows.push(...batch);
+
+      if (batch.length < limit) {
+        break;
+      }
+
+      offset += limit;
+      if (this.requestIntervalMs > 0) {
+        await sleep(this.requestIntervalMs);
+      }
+    }
 
     return rows.map((row) => this.mapRow(row)).filter((x): x is AnalyticsBySkuDay => x !== null);
   }
