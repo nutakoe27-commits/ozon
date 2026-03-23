@@ -1,0 +1,13 @@
+{
+  "name": "ozon/php-dashboard-pipeline",
+  "description": "Ozon Performance + Seller API pipeline in pure PHP",
+  "type": "project",
+  "require": {
+    "php": ">=7.1"
+  },
+  "autoload": {
+    "psr-4": {
+      "Ozon\\": "src/"
+    }
+  }
+}
