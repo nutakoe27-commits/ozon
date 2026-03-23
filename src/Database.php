@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Ozon\Database;
+namespace Ozon;
 
 use PDO;
 

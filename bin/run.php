@@ -3,15 +3,15 @@
 
 declare(strict_types=1);
 
-use Ozon\Adapter\MergeAdapter;
-use Ozon\Config\AppConfig;
-use Ozon\Http\HttpClient;
-use Ozon\Pipeline\OzonDashboardPipeline;
-use Ozon\Service\AnalyticsService;
-use Ozon\Service\CampaignService;
-use Ozon\Service\PerformanceAuthService;
-use Ozon\Service\ProductService;
-use Ozon\Service\StatisticsService;
+use Ozon\MergeAdapter;
+use Ozon\AppConfig;
+use Ozon\HttpClient;
+use Ozon\OzonDashboardPipeline;
+use Ozon\AnalyticsService;
+use Ozon\CampaignService;
+use Ozon\PerformanceAuthService;
+use Ozon\ProductService;
+use Ozon\StatisticsService;
 
 require __DIR__ . '/../src/bootstrap.php';
 

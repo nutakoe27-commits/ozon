@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Ozon\Repository;
+namespace Ozon;
 
 use PDO;
 
@@ -20,7 +20,7 @@ final class StoreRepository
     {
         $stmt = $this->pdo->prepare(
             'INSERT INTO stores(user_id, name, performance_client_id, performance_client_secret, seller_client_id, seller_api_key, created_at)
-             VALUES(:user_id, :name, :pcid, :pcsecret, :scid, :sakey, NOW())'
+             VALUES(:user_id, :name, :pcid, :pcsecret, :scid, :sakey, CURRENT_TIMESTAMP)'
         );
 
         $stmt->execute(array(

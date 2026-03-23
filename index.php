@@ -34,7 +34,7 @@ $path   = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $path   = rtrim($path, '/') ?: '/';
 
 // ── Авторизация ───────────────────────────────────────────────────────────────
-if (in_array($path, ['/login'], true) || in_array($path, ['/login', '/register'], true)) {
+if (in_array($path, ['/login', '/register'], true)) {
     $pdo      = require __DIR__ . '/config/db.php';
     $userRepo = new \Ozon\UserRepository($pdo);
     $auth     = new \Ozon\Controller\AuthController($userRepo);
@@ -80,6 +80,10 @@ if (str_starts_with($path, '/api/')) {
 
     if ($path === '/api/stores' && $method === 'GET') {
         $controller->getStores($userId);
+        exit;
+    }
+    if ($path === '/api/stores' && $method === 'POST') {
+        $controller->createStore($userId);
         exit;
     }
     if ($path === '/api/dashboard/refresh' && $method === 'POST') {

@@ -2,9 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Ozon\Auth;
-
-use Ozon\Repository\UserRepository;
+namespace Ozon;
 
 final class AuthService
 {
