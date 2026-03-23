@@ -235,14 +235,15 @@ async function submitForm(e, type){
   }
 
   try {
-    const resp = await fetch('/' + type, {
+    const { resp, data: json } = await requestJson('/' + type, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({email, password}),
     });
-    const json = await resp.json();
 
-    if(json.error){
+    if(!resp.ok && !json.error){
+      showAlert('Ошибка сервера: HTTP ' + resp.status, false);
+    } else if(json.error){
       showAlert(json.error, false);
     } else if(json.redirect){
       showAlert(isLogin ? 'Добро пожаловать!' : 'Аккаунт создан!', true);
@@ -261,6 +262,17 @@ function showAlert(text, success){
   document.getElementById('alertText').textContent = text;
 }
 function hideAlert(){ document.getElementById('alert').className = 'alert'; }
+
+async function requestJson(url, options = {}){
+  const resp = await fetch(url, options);
+  const text = await resp.text();
+  try {
+    return { resp, data: text ? JSON.parse(text) : {} };
+  } catch (_) {
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`Некорректный ответ сервера (${resp.status}): ${snippet || 'empty body'}`);
+  }
+}
 </script>
 </body>
 </html>
