@@ -409,8 +409,7 @@ window.addEventListener('DOMContentLoaded', () => loadStores());
 async function loadStores(){
   const select = document.getElementById('storeSelect');
   try {
-    const resp = await fetch('/api/stores');
-    const json = await resp.json();
+    const { resp, data: json } = await requestJson('/api/stores');
     if (!resp.ok || !Array.isArray(json.stores)) throw new Error(json.error || 'Не удалось загрузить магазины');
     if (json.stores.length === 0) {
       select.innerHTML = '<option value="">🏪 Нет магазинов</option>';
@@ -436,12 +435,11 @@ async function addStore(){
     return;
   }
   try{
-    const resp = await fetch('/api/stores', {
+    const { resp, data: json } = await requestJson('/api/stores', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name, performance_client_id, performance_client_secret, seller_client_id, seller_api_key}),
     });
-    const json = await resp.json();
     if(!resp.ok || json.error) throw new Error(json.error || ('HTTP ' + resp.status));
     await loadStores();
   } catch(e){
@@ -460,12 +458,11 @@ async function refreshDashboard(){
   const dateTo   = document.getElementById('dateTo').value;
 
   try {
-    const resp = await fetch('/api/dashboard/refresh', {
+    const { resp, data: json } = await requestJson('/api/dashboard/refresh', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({store_id:storeId, date_from:dateFrom, date_to:dateTo}),
     });
-    const json = await resp.json();
     if (!resp.ok || json.error){
       showError(json.error || 'Ошибка сервера ' + resp.status);
       render(MOCK_UNIFIED); // показываем демо-данные даже при ошибке
@@ -764,6 +761,23 @@ function fmtRub(n){ return '₽'+fmtK(n); }
 function showError(msg){ document.getElementById('errorText').textContent=msg; document.getElementById('errorBanner').classList.add('show'); }
 function hideError(){ document.getElementById('errorBanner').classList.remove('show'); }
 function escapeHtml(v){ return String(v).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+async function requestJson(url, options = {}){
+  const resp = await fetch(url, options);
+  const text = await resp.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_) {
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`Некорректный ответ сервера (${resp.status}): ${snippet || 'empty body'}`);
+  }
+
+  if (resp.status === 401) {
+    window.location.href = '/login';
+  }
+
+  return { resp, data };
+}
 </script>
 </body>
 </html>
