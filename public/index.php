@@ -20,6 +20,12 @@ require __DIR__ . '/../src/bootstrap.php';
 
 session_start();
 
+
+// Prevent shared-host timeout during long Ozon API requests.
+if (function_exists('set_time_limit')) {
+    @set_time_limit(0);
+}
+
 $error = null;
 $success = null;
 $user = null;
@@ -93,7 +99,7 @@ try {
                     new CampaignService($performanceClient),
                     new ProductService($performanceClient),
                     new StatisticsService($performanceClient),
-                    new AnalyticsService($sellerClient, $config->analyticsRequestIntervalMs),
+                    new AnalyticsService($sellerClient, 0),
                     new MergeAdapter()
                 );
 
