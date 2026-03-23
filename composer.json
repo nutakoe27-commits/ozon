@@ -3,7 +3,7 @@
   "description": "Ozon Performance + Seller API pipeline in pure PHP",
   "type": "project",
   "require": {
-    "php": ">=8.1"
+    "php": ">=7.1"
   },
   "autoload": {
     "psr-4": {

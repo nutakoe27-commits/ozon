@@ -9,100 +9,101 @@ use RuntimeException;
 
 final class StatisticsService
 {
-    public function __construct(private readonly HttpClient $performanceClient)
+    /** @var HttpClient */
+    private $performanceClient;
+
+    public function __construct(HttpClient $performanceClient)
     {
+        $this->performanceClient = $performanceClient;
     }
 
-    /** @param array<int,int> $campaignIds @return array<int,array<string,mixed>> */
-    public function getProductsStatistics(array $campaignIds, string $dateFrom, string $dateTo): array
+    public function getProductsStatistics(array $campaignIds, $dateFrom, $dateTo)
     {
         $reportId = $this->generateReport('/api/client/statistic/products/generate', $campaignIds, $dateFrom, $dateTo);
-
         return $this->awaitReport($reportId);
     }
 
-    /** @param array<int,int> $campaignIds @return array<int,array<string,mixed>> */
-    public function getOrdersStatistics(array $campaignIds, string $dateFrom, string $dateTo): array
+    public function getOrdersStatistics(array $campaignIds, $dateFrom, $dateTo)
     {
         $reportId = $this->generateReport('/api/client/statistic/orders/generate', $campaignIds, $dateFrom, $dateTo);
-
         return $this->awaitReport($reportId);
     }
 
-    /** @param array<int,int> $campaignIds */
-    private function generateReport(string $path, array $campaignIds, string $dateFrom, string $dateTo): string
+    private function generateReport($path, array $campaignIds, $dateFrom, $dateTo)
     {
         if (count($campaignIds) > 10) {
             throw new RuntimeException('Performance API limit: max 10 campaigns per report request');
         }
 
-        $response = $this->performanceClient->post($path, [
+        $response = $this->performanceClient->post($path, array(
             'campaign_ids' => $campaignIds,
             'from' => $dateFrom,
             'to' => $dateTo,
-        ]);
+        ));
 
-        $reportId = $response['uuid'] ?? $response['report_id'] ?? $response['id'] ?? null;
+        $reportId = isset($response['uuid']) ? $response['uuid'] : (isset($response['report_id']) ? $response['report_id'] : (isset($response['id']) ? $response['id'] : null));
         if (!is_string($reportId) || $reportId === '') {
             // TODO(api-doc-gap): confirm exact generate report response schema
-            throw new RuntimeException("Cannot extract report id for {$path}");
+            throw new RuntimeException('Cannot extract report id for ' . $path);
         }
 
         return $reportId;
     }
 
-    /** @return array<int,array<string,mixed>> */
-    private function awaitReport(string $reportId): array
+    private function awaitReport($reportId)
     {
         $attempts = 30;
 
         for ($i = 0; $i < $attempts; $i++) {
-            $response = $this->performanceClient->get("/api/client/statistics/{$reportId}");
-            $status = $response['state'] ?? $response['status'] ?? null;
+            $response = $this->performanceClient->get('/api/client/statistics/' . $reportId);
+            $status = isset($response['state']) ? $response['state'] : (isset($response['status']) ? $response['status'] : null);
 
-            if (in_array($status, ['ready', 'completed', 'success'], true)) {
-                $rows = $response['data'] ?? $response['result'] ?? [];
-
-                return $this->mapRows($rows);
+            if (in_array($status, array('ready', 'completed', 'success'), true)) {
+                $rows = isset($response['data']) ? $response['data'] : (isset($response['result']) ? $response['result'] : array());
+                return $this->mapRows(is_array($rows) ? $rows : array());
             }
 
-            if (in_array($status, ['failed', 'error'], true)) {
-                throw new RuntimeException("Statistics report failed: {$reportId}, status={$status}");
+            if (in_array($status, array('failed', 'error'), true)) {
+                throw new RuntimeException('Statistics report failed: ' . $reportId . ', status=' . (string)$status);
             }
 
-            usleep(2_000_000);
+            usleep(2000000);
         }
 
-        throw new RuntimeException("Timeout while waiting report {$reportId}");
+        throw new RuntimeException('Timeout while waiting report ' . $reportId);
     }
 
-    /** @param array<int,array<string,mixed>> $rows @return array<int,array<string,mixed>> */
-    private function mapRows(array $rows): array
+    private function mapRows(array $rows)
     {
-        $result = [];
+        $result = array();
         foreach ($rows as $row) {
-            $sku = $this->normalizeSku($row['sku'] ?? $row['skuId'] ?? $row['item_id'] ?? null);
-            $day = $row['day'] ?? $row['date'] ?? null;
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $skuSource = isset($row['sku']) ? $row['sku'] : (isset($row['skuId']) ? $row['skuId'] : (isset($row['item_id']) ? $row['item_id'] : null));
+            $sku = $this->normalizeSku($skuSource);
+            $day = isset($row['day']) ? $row['day'] : (isset($row['date']) ? $row['date'] : null);
             if ($sku === null || !is_string($day)) {
                 // TODO(api-doc-gap): confirm sku/day field names in statistics payload
                 continue;
             }
 
-            $result[] = [
+            $result[] = array(
                 'sku' => $sku,
                 'day' => $day,
-                'impressions' => $this->normalizeNumber($row['impressions'] ?? 0),
-                'clicks' => $this->normalizeNumber($row['clicks'] ?? 0),
-                'spend' => $this->normalizeNumber($row['spend'] ?? 0),
-                'orders' => $this->normalizeNumber($row['orders'] ?? 0),
-                'revenue' => $this->normalizeNumber($row['revenue'] ?? 0),
-            ];
+                'impressions' => $this->normalizeNumber(isset($row['impressions']) ? $row['impressions'] : 0),
+                'clicks' => $this->normalizeNumber(isset($row['clicks']) ? $row['clicks'] : 0),
+                'spend' => $this->normalizeNumber(isset($row['spend']) ? $row['spend'] : 0),
+                'orders' => $this->normalizeNumber(isset($row['orders']) ? $row['orders'] : 0),
+                'revenue' => $this->normalizeNumber(isset($row['revenue']) ? $row['revenue'] : 0),
+            );
         }
 
         return $result;
     }
 
-    private function normalizeSku(mixed $value): ?int
+    private function normalizeSku($value)
     {
         if (is_int($value)) {
             return $value;
@@ -114,7 +115,7 @@ final class StatisticsService
         return null;
     }
 
-    private function normalizeNumber(mixed $value): float
+    private function normalizeNumber($value)
     {
         if (is_int($value) || is_float($value)) {
             return (float)$value;

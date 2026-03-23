@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-spl_autoload_register(static function (string $class): void {
+spl_autoload_register(function ($class) {
     $prefix = 'Ozon\\';
-    if (!str_starts_with($class, $prefix)) {
+    if (strncmp($class, $prefix, strlen($prefix)) !== 0) {
         return;
     }
 

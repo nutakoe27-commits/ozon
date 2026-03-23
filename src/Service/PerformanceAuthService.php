@@ -9,22 +9,29 @@ use RuntimeException;
 
 final class PerformanceAuthService
 {
-    public function __construct(
-        private readonly HttpClient $client,
-        private readonly string $clientId,
-        private readonly string $clientSecret,
-    ) {
+    /** @var HttpClient */
+    private $client;
+    /** @var string */
+    private $clientId;
+    /** @var string */
+    private $clientSecret;
+
+    public function __construct(HttpClient $client, $clientId, $clientSecret)
+    {
+        $this->client = $client;
+        $this->clientId = $clientId;
+        $this->clientSecret = $clientSecret;
     }
 
-    public function getAccessToken(): string
+    public function getAccessToken()
     {
-        $response = $this->client->post('/api/client/token', [
+        $response = $this->client->post('/api/client/token', array(
             'client_id' => $this->clientId,
             'client_secret' => $this->clientSecret,
             'grant_type' => 'client_credentials',
-        ]);
+        ));
 
-        $token = $response['access_token'] ?? null;
+        $token = isset($response['access_token']) ? $response['access_token'] : null;
         if (!is_string($token) || $token === '') {
             throw new RuntimeException('Performance token response does not contain access_token');
         }

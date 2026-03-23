@@ -8,21 +8,24 @@ use Ozon\DTO\UnifiedProductDay;
 
 final class MergeAdapter
 {
-    /** @param array<int,array<string,mixed>> $rows @return array<int,array<string,mixed>> */
-    public function aggregateAdStats(array $rows): array
+    public function aggregateAdStats(array $rows)
     {
-        $acc = [];
+        $acc = array();
 
         foreach ($rows as $row) {
-            $sku = (int)($row['sku'] ?? 0);
-            $day = (string)($row['day'] ?? '');
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $sku = isset($row['sku']) ? (int)$row['sku'] : 0;
+            $day = isset($row['day']) ? (string)$row['day'] : '';
             if ($sku === 0 || $day === '') {
                 continue;
             }
 
             $key = $sku . ':' . $day;
             if (!isset($acc[$key])) {
-                $acc[$key] = [
+                $acc[$key] = array(
                     'sku' => $sku,
                     'day' => $day,
                     'impressions' => 0.0,
@@ -30,32 +33,38 @@ final class MergeAdapter
                     'spend' => 0.0,
                     'orders' => 0.0,
                     'revenue' => 0.0,
-                ];
+                );
             }
 
-            $acc[$key]['impressions'] += (float)($row['impressions'] ?? 0);
-            $acc[$key]['clicks'] += (float)($row['clicks'] ?? 0);
-            $acc[$key]['spend'] += (float)($row['spend'] ?? 0);
-            $acc[$key]['orders'] += (float)($row['orders'] ?? 0);
-            $acc[$key]['revenue'] += (float)($row['revenue'] ?? 0);
+            $acc[$key]['impressions'] += isset($row['impressions']) ? (float)$row['impressions'] : 0.0;
+            $acc[$key]['clicks'] += isset($row['clicks']) ? (float)$row['clicks'] : 0.0;
+            $acc[$key]['spend'] += isset($row['spend']) ? (float)$row['spend'] : 0.0;
+            $acc[$key]['orders'] += isset($row['orders']) ? (float)$row['orders'] : 0.0;
+            $acc[$key]['revenue'] += isset($row['revenue']) ? (float)$row['revenue'] : 0.0;
         }
 
         return array_values($acc);
     }
 
-    /** @param array<int,array<string,mixed>> $adRows @param array<int,array<string,mixed>> $analyticsRows @return array<int,array<string,mixed>> */
-    public function mergeBySku(array $adRows, array $analyticsRows): array
+    public function mergeBySku(array $adRows, array $analyticsRows)
     {
-        $analyticsMap = [];
+        $analyticsMap = array();
         foreach ($analyticsRows as $row) {
+            if (!is_array($row) || !isset($row['sku']) || !isset($row['day'])) {
+                continue;
+            }
             $key = (string)$row['sku'] . ':' . (string)$row['day'];
             $analyticsMap[$key] = $row;
         }
 
-        $result = [];
+        $result = array();
         foreach ($adRows as $ad) {
+            if (!is_array($ad) || !isset($ad['sku']) || !isset($ad['day'])) {
+                continue;
+            }
+
             $key = (string)$ad['sku'] . ':' . (string)$ad['day'];
-            $organic = $analyticsMap[$key] ?? [
+            $organic = isset($analyticsMap[$key]) ? $analyticsMap[$key] : array(
                 'sku' => (int)$ad['sku'],
                 'day' => (string)$ad['day'],
                 'revenue' => 0.0,
@@ -64,26 +73,26 @@ final class MergeAdapter
                 'hitsToCart' => 0.0,
                 'sessionView' => 0.0,
                 'convToCart' => 0.0,
-            ];
+            );
 
-            $spend = (float)($ad['spend'] ?? 0);
-            $clicks = (float)($ad['clicks'] ?? 0);
-            $impressions = (float)($ad['impressions'] ?? 0);
-            $orders = (float)($ad['orders'] ?? 0);
-            $revenue = (float)($ad['revenue'] ?? 0);
+            $spend = isset($ad['spend']) ? (float)$ad['spend'] : 0.0;
+            $clicks = isset($ad['clicks']) ? (float)$ad['clicks'] : 0.0;
+            $impressions = isset($ad['impressions']) ? (float)$ad['impressions'] : 0.0;
+            $orders = isset($ad['orders']) ? (float)$ad['orders'] : 0.0;
+            $revenue = isset($ad['revenue']) ? (float)$ad['revenue'] : 0.0;
 
             $dto = new UnifiedProductDay(
-                sku: (int)$ad['sku'],
-                day: (string)$ad['day'],
-                ad: $ad,
-                organic: $organic,
-                computed: [
+                (int)$ad['sku'],
+                (string)$ad['day'],
+                $ad,
+                $organic,
+                array(
                     'cpc' => $this->safeDivide($spend, $clicks),
                     'ctr' => $this->safeDivide($clicks, $impressions),
                     'roas' => $this->safeDivide($revenue, $spend),
                     'acos' => $this->safeDivide($spend, $revenue),
                     'cr' => $this->safeDivide($orders, $clicks),
-                ],
+                )
             );
 
             $result[] = $dto->toArray();
@@ -92,12 +101,12 @@ final class MergeAdapter
         return $result;
     }
 
-    private function safeDivide(float $a, float $b): float
+    private function safeDivide($a, $b)
     {
-        if ($b == 0.0) {
+        if ((float)$b == 0.0) {
             return 0.0;
         }
 
-        return $a / $b;
+        return (float)$a / (float)$b;
     }
 }

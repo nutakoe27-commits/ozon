@@ -12,42 +12,62 @@ use Ozon\Service\StatisticsService;
 
 final class OzonDashboardPipeline
 {
+    /** @var CampaignService */
+    private $campaignService;
+    /** @var ProductService */
+    private $productService;
+    /** @var StatisticsService */
+    private $statisticsService;
+    /** @var AnalyticsService */
+    private $analyticsService;
+    /** @var MergeAdapter */
+    private $mergeAdapter;
+
     public function __construct(
-        private readonly CampaignService $campaignService,
-        private readonly ProductService $productService,
-        private readonly StatisticsService $statisticsService,
-        private readonly AnalyticsService $analyticsService,
-        private readonly MergeAdapter $mergeAdapter,
+        CampaignService $campaignService,
+        ProductService $productService,
+        StatisticsService $statisticsService,
+        AnalyticsService $analyticsService,
+        MergeAdapter $mergeAdapter
     ) {
+        $this->campaignService = $campaignService;
+        $this->productService = $productService;
+        $this->statisticsService = $statisticsService;
+        $this->analyticsService = $analyticsService;
+        $this->mergeAdapter = $mergeAdapter;
     }
 
-    /** @return array{promotedSkus: array<int,int>, unified: array<int,array<string,mixed>>} */
-    public function run(string $dateFrom, string $dateTo): array
+    public function run($dateFrom, $dateTo)
     {
         $cpcCampaigns = $this->campaignService->getCpcCampaigns();
-        $campaignIds = array_values(array_map(static fn(array $x): int => (int)$x['id'], $cpcCampaigns));
-
-        if ($campaignIds === []) {
-            return ['promotedSkus' => [], 'unified' => []];
+        $campaignIds = array();
+        foreach ($cpcCampaigns as $campaign) {
+            if (is_array($campaign) && isset($campaign['id'])) {
+                $campaignIds[] = (int)$campaign['id'];
+            }
         }
 
-        $productsByCampaign = [];
+        if (count($campaignIds) === 0) {
+            return array('promotedSkus' => array(), 'unified' => array());
+        }
+
+        $productsByCampaign = array();
         foreach ($campaignIds as $campaignId) {
-            $productsByCampaign = [...$productsByCampaign, ...$this->productService->getCampaignProducts($campaignId)];
+            $productsByCampaign = array_merge($productsByCampaign, $this->productService->getCampaignProducts($campaignId));
         }
 
-        $promotedSkus = [];
+        $promotedSkus = array();
         foreach ($productsByCampaign as $product) {
-            if (isset($product['sku']) && is_numeric((string)$product['sku'])) {
+            if (is_array($product) && isset($product['sku']) && is_numeric((string)$product['sku'])) {
                 $promotedSkus[] = (int)$product['sku'];
             }
         }
         $promotedSkus = array_values(array_unique($promotedSkus));
 
-        $adStats = [];
+        $adStats = array();
         foreach (array_chunk($campaignIds, 10) as $chunk) {
-            $adStats = [...$adStats, ...$this->statisticsService->getProductsStatistics($chunk, $dateFrom, $dateTo)];
-            $adStats = [...$adStats, ...$this->statisticsService->getOrdersStatistics($chunk, $dateFrom, $dateTo)];
+            $adStats = array_merge($adStats, $this->statisticsService->getProductsStatistics($chunk, $dateFrom, $dateTo));
+            $adStats = array_merge($adStats, $this->statisticsService->getOrdersStatistics($chunk, $dateFrom, $dateTo));
         }
 
         $adStats = $this->mergeAdapter->aggregateAdStats($adStats);
@@ -55,9 +75,9 @@ final class OzonDashboardPipeline
         $analyticsRows = $this->analyticsService->getAnalyticsBySkuDay($promotedSkus, $dateFrom, $dateTo);
         $unified = $this->mergeAdapter->mergeBySku($adStats, $analyticsRows);
 
-        return [
+        return array(
             'promotedSkus' => $promotedSkus,
             'unified' => $unified,
-        ];
+        );
     }
 }

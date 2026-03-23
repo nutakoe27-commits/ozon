@@ -8,29 +8,55 @@ use Ozon\Http\HttpClient;
 
 final class CampaignService
 {
-    public function __construct(private readonly HttpClient $performanceClient)
+    /** @var HttpClient */
+    private $performanceClient;
+
+    public function __construct(HttpClient $performanceClient)
     {
+        $this->performanceClient = $performanceClient;
     }
 
-    /** @return array<int,array<string,mixed>> */
-    public function getAllCampaigns(): array
+    public function getAllCampaigns()
     {
         $response = $this->performanceClient->get('/api/client/campaign');
 
-        if (array_is_list($response)) {
+        if ($this->isList($response)) {
             return $response;
         }
 
-        return $response['list'] ?? $response['campaigns'] ?? [];
+        if (isset($response['list']) && is_array($response['list'])) {
+            return $response['list'];
+        }
+
+        if (isset($response['campaigns']) && is_array($response['campaigns'])) {
+            return $response['campaigns'];
+        }
+
+        return array();
     }
 
-    /** @return array<int,array<string,mixed>> */
-    public function getCpcCampaigns(): array
+    public function getCpcCampaigns()
     {
         $campaigns = $this->getAllCampaigns();
+        $out = array();
 
-        return array_values(array_filter($campaigns, static function (array $campaign): bool {
-            return ($campaign['advObjectType'] ?? null) === 'SKU';
-        }));
+        foreach ($campaigns as $campaign) {
+            if (is_array($campaign) && isset($campaign['advObjectType']) && $campaign['advObjectType'] === 'SKU') {
+                $out[] = $campaign;
+            }
+        }
+
+        return $out;
+    }
+
+    private function isList(array $arr)
+    {
+        $i = 0;
+        foreach ($arr as $key => $_value) {
+            if ($key !== $i++) {
+                return false;
+            }
+        }
+        return true;
     }
 }

@@ -9,31 +9,60 @@ use RuntimeException;
 
 final class AppConfig
 {
+    /** @var string */
+    public $performanceBaseUrl;
+    /** @var string */
+    public $performanceClientId;
+    /** @var string */
+    public $performanceClientSecret;
+    /** @var string */
+    public $sellerBaseUrl;
+    /** @var string */
+    public $sellerClientId;
+    /** @var string */
+    public $sellerApiKey;
+    /** @var string */
+    public $dateFrom;
+    /** @var string */
+    public $dateTo;
+    /** @var int */
+    public $analyticsRequestIntervalMs;
+
     public function __construct(
-        public readonly string $performanceBaseUrl,
-        public readonly string $performanceClientId,
-        public readonly string $performanceClientSecret,
-        public readonly string $sellerBaseUrl,
-        public readonly string $sellerClientId,
-        public readonly string $sellerApiKey,
-        public readonly string $dateFrom,
-        public readonly string $dateTo,
-        public readonly int $analyticsRequestIntervalMs,
+        $performanceBaseUrl,
+        $performanceClientId,
+        $performanceClientSecret,
+        $sellerBaseUrl,
+        $sellerClientId,
+        $sellerApiKey,
+        $dateFrom,
+        $dateTo,
+        $analyticsRequestIntervalMs
     ) {
+        $this->performanceBaseUrl = $performanceBaseUrl;
+        $this->performanceClientId = $performanceClientId;
+        $this->performanceClientSecret = $performanceClientSecret;
+        $this->sellerBaseUrl = $sellerBaseUrl;
+        $this->sellerClientId = $sellerClientId;
+        $this->sellerApiKey = $sellerApiKey;
+        $this->dateFrom = $dateFrom;
+        $this->dateTo = $dateTo;
+        $this->analyticsRequestIntervalMs = (int)$analyticsRequestIntervalMs;
     }
 
-    public static function fromEnv(): self
+    /** @return self */
+    public static function fromEnv()
     {
         $cfg = new self(
-            performanceBaseUrl: self::env('OZON_PERFORMANCE_BASE_URL', 'https://api-performance.ozon.ru'),
-            performanceClientId: self::envRequired('OZON_PERFORMANCE_CLIENT_ID'),
-            performanceClientSecret: self::envRequired('OZON_PERFORMANCE_CLIENT_SECRET'),
-            sellerBaseUrl: self::env('OZON_SELLER_BASE_URL', 'https://api-seller.ozon.ru'),
-            sellerClientId: self::envRequired('OZON_SELLER_CLIENT_ID'),
-            sellerApiKey: self::envRequired('OZON_SELLER_API_KEY'),
-            dateFrom: self::envRequired('OZON_DATE_FROM'),
-            dateTo: self::envRequired('OZON_DATE_TO'),
-            analyticsRequestIntervalMs: (int)self::env('OZON_ANALYTICS_REQUEST_INTERVAL_MS', '60000'),
+            self::env('OZON_PERFORMANCE_BASE_URL', 'https://api-performance.ozon.ru'),
+            self::envRequired('OZON_PERFORMANCE_CLIENT_ID'),
+            self::envRequired('OZON_PERFORMANCE_CLIENT_SECRET'),
+            self::env('OZON_SELLER_BASE_URL', 'https://api-seller.ozon.ru'),
+            self::envRequired('OZON_SELLER_CLIENT_ID'),
+            self::envRequired('OZON_SELLER_API_KEY'),
+            self::envRequired('OZON_DATE_FROM'),
+            self::envRequired('OZON_DATE_TO'),
+            self::env('OZON_ANALYTICS_REQUEST_INTERVAL_MS', '60000')
         );
 
         $cfg->validate();
@@ -41,7 +70,7 @@ final class AppConfig
         return $cfg;
     }
 
-    private function validate(): void
+    private function validate()
     {
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $this->dateFrom) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $this->dateTo)) {
             throw new RuntimeException('OZON_DATE_FROM and OZON_DATE_TO must be in YYYY-MM-DD format');
@@ -64,17 +93,17 @@ final class AppConfig
         }
     }
 
-    private static function envRequired(string $key): string
+    private static function envRequired($key)
     {
         $value = getenv($key);
         if ($value === false || trim($value) === '') {
-            throw new RuntimeException("Missing required env: {$key}");
+            throw new RuntimeException('Missing required env: ' . $key);
         }
 
         return $value;
     }
 
-    private static function env(string $key, string $default): string
+    private static function env($key, $default)
     {
         $value = getenv($key);
         if ($value === false || trim($value) === '') {

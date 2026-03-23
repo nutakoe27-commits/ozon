@@ -8,38 +8,47 @@ use Ozon\Http\HttpClient;
 
 final class ProductService
 {
-    public function __construct(private readonly HttpClient $performanceClient)
+    /** @var HttpClient */
+    private $performanceClient;
+
+    public function __construct(HttpClient $performanceClient)
     {
+        $this->performanceClient = $performanceClient;
     }
 
-    /** @return array<int,array<string,mixed>> */
-    public function getCampaignProducts(int $campaignId): array
+    public function getCampaignProducts($campaignId)
     {
-        $firstTry = $this->performanceClient->get("/api/client/campaign/{$campaignId}/objects");
-        $records = $firstTry['items'] ?? $firstTry['products'] ?? $firstTry['result'] ?? [];
+        $campaignId = (int)$campaignId;
 
-        if ($records !== []) {
+        $firstTry = $this->performanceClient->get('/api/client/campaign/' . $campaignId . '/objects');
+        $records = isset($firstTry['items']) ? $firstTry['items'] : (isset($firstTry['products']) ? $firstTry['products'] : (isset($firstTry['result']) ? $firstTry['result'] : array()));
+
+        if (is_array($records) && count($records) > 0) {
             return $this->mapProducts($campaignId, $records);
         }
 
-        $fallback = $this->performanceClient->get("/api/client/campaign/{$campaignId}/v2/products");
-        $fallbackRecords = $fallback['items'] ?? $fallback['products'] ?? $fallback['result'] ?? [];
+        $fallback = $this->performanceClient->get('/api/client/campaign/' . $campaignId . '/v2/products');
+        $fallbackRecords = isset($fallback['items']) ? $fallback['items'] : (isset($fallback['products']) ? $fallback['products'] : (isset($fallback['result']) ? $fallback['result'] : array()));
 
-        return $this->mapProducts($campaignId, $fallbackRecords);
+        return $this->mapProducts($campaignId, is_array($fallbackRecords) ? $fallbackRecords : array());
     }
 
-    /** @param array<int,array<string,mixed>> $rows @return array<int,array<string,mixed>> */
-    private function mapProducts(int $campaignId, array $rows): array
+    private function mapProducts($campaignId, array $rows)
     {
-        $out = [];
+        $out = array();
         foreach ($rows as $row) {
-            $sku = $this->normalizeSku($row['sku'] ?? $row['skuId'] ?? $row['offer_id'] ?? null);
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $skuSource = isset($row['sku']) ? $row['sku'] : (isset($row['skuId']) ? $row['skuId'] : (isset($row['offer_id']) ? $row['offer_id'] : null));
+            $sku = $this->normalizeSku($skuSource);
             if ($sku === null) {
                 // TODO(api-doc-gap): confirm exact sku field names for /objects and /v2/products
                 continue;
             }
 
-            $row['campaignId'] = $campaignId;
+            $row['campaignId'] = (int)$campaignId;
             $row['sku'] = $sku;
             $out[] = $row;
         }
@@ -47,7 +56,7 @@ final class ProductService
         return $out;
     }
 
-    private function normalizeSku(mixed $value): ?int
+    private function normalizeSku($value)
     {
         if (is_int($value)) {
             return $value;

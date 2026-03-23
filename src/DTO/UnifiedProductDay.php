@@ -6,29 +6,34 @@ namespace Ozon\DTO;
 
 final class UnifiedProductDay
 {
-    /**
-     * @param array<string,mixed> $ad
-     * @param array<string,mixed> $organic
-     * @param array<string,float|int> $computed
-     */
-    public function __construct(
-        public readonly int $sku,
-        public readonly string $day,
-        public readonly array $ad,
-        public readonly array $organic,
-        public readonly array $computed,
-    ) {
+    /** @var int */
+    private $sku;
+    /** @var string */
+    private $day;
+    /** @var array */
+    private $ad;
+    /** @var array */
+    private $organic;
+    /** @var array */
+    private $computed;
+
+    public function __construct($sku, $day, array $ad, array $organic, array $computed)
+    {
+        $this->sku = (int)$sku;
+        $this->day = (string)$day;
+        $this->ad = $ad;
+        $this->organic = $organic;
+        $this->computed = $computed;
     }
 
-    /** @return array<string,mixed> */
-    public function toArray(): array
+    public function toArray()
     {
-        return [
+        return array(
             'sku' => $this->sku,
             'day' => $this->day,
             'ad' => $this->ad,
             'organic' => $this->organic,
             'computed' => $this->computed,
-        ];
+        );
     }
 }
