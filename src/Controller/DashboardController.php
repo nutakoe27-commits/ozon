@@ -32,7 +32,9 @@ final class DashboardController
     public function getStores(int $userId): void
     {
         $rows   = $this->storeRepo->allByUser($userId);
-        $stores = array_map(fn($r) => ['id' => $r['id'], 'name' => $r['name']], $rows);
+        $stores = array_map(function ($r) {
+            return ['id' => $r['id'], 'name' => $r['name']];
+        }, $rows);
         $this->json(['stores' => $stores]);
     }
 
