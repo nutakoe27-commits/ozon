@@ -1,76 +1,84 @@
-# Ozon API Pipeline (PHP)
+# Ozon Dashboard (PHP 7.1 + MySQL)
 
-Полная перепись проекта на **PHP 7.1+**.
+Теперь это веб-приложение с:
 
-## Что реализовано
+- авторизацией пользователей (регистрация/логин),
+- MySQL-хранилищем,
+- созданием магазинов через интерфейс,
+- добавлением Ozon API-ключей через интерфейс,
+- запуском pipeline по выбранному магазину и отображением данных в дашборде.
 
-1. Auth Performance API:
-   - `POST /api/client/token`
-2. Кампании:
-   - `GET /api/client/campaign`
-   - фильтр CPC: `advObjectType=SKU`
-3. Товары кампаний:
-   - `GET /api/client/campaign/{campaignId}/objects`
-   - fallback: `GET /api/client/campaign/{campaignId}/v2/products`
-4. Рекламная статистика (async):
-   - `POST /api/client/statistic/products/generate`
-   - `POST /api/client/statistic/orders/generate`
-   - polling: `GET /api/client/statistics/{UUID}`
-5. Seller analytics:
-   - `POST /v1/analytics/data` (pagination + interval)
-6. Дополнительно:
-   - `POST /v1/analytics/product-queries`
-   - `POST /v1/finance/realization/by-day`
-7. Merge по `sku+day` + метрики:
-   - `cpc`, `ctr`, `roas`, `acos`, `cr`
+## 1) Требования
 
-## Структура
+- PHP 7.1+
+- MySQL 5.7+/8+
+- Расширения PHP: `pdo_mysql`, `curl`, `json`, `mbstring`
 
-- `src/Config/AppConfig.php` — env-конфиг + валидация ограничений
-- `src/Http/HttpClient.php` — HTTP клиент на cURL
-- `src/Service/*` — сервисы API
-- `src/Adapter/MergeAdapter.php` — агрегация и merge
-- `src/Pipeline/OzonDashboardPipeline.php` — orchestration
-- `bin/run.php` — запуск pipeline и сохранение JSON
-- `public/index.php` — простой PHP-дашборд
-- `storage/data/unified.json` — результат pipeline
+## 2) Настройка БД
 
-## ENV
+Создайте БД и выполните SQL:
 
 ```bash
-export OZON_PERFORMANCE_CLIENT_ID="..."
-export OZON_PERFORMANCE_CLIENT_SECRET="..."
-export OZON_SELLER_CLIENT_ID="..."
-export OZON_SELLER_API_KEY="..."
+mysql -u root -p ozon_dashboard < storage/schema.sql
+```
 
+## 3) Переменные окружения
+
+```bash
+# DB
+export DB_HOST="127.0.0.1"
+export DB_PORT="3306"
+export DB_NAME="ozon_dashboard"
+export DB_USER="root"
+export DB_PASSWORD=""
+
+# Ozon base urls
 export OZON_PERFORMANCE_BASE_URL="https://api-performance.ozon.ru"
 export OZON_SELLER_BASE_URL="https://api-seller.ozon.ru"
-export OZON_ANALYTICS_REQUEST_INTERVAL_MS="60000"
 
+# Defaults for UI period
 export OZON_DATE_FROM="2024-01-01"
 export OZON_DATE_TO="2024-01-31"
+export OZON_ANALYTICS_REQUEST_INTERVAL_MS="60000"
 ```
 
-## Запуск pipeline
+> Для CLI (`bin/run.php`) дополнительно нужны `OZON_PERFORMANCE_CLIENT_ID`, `OZON_PERFORMANCE_CLIENT_SECRET`, `OZON_SELLER_CLIENT_ID`, `OZON_SELLER_API_KEY`.
 
-```bash
-php bin/run.php
-```
-
-JSON будет записан в `storage/data/unified.json`.
-
-## Локальный запуск веб-интерфейса
+## 4) Запуск веба
 
 ```bash
 php -S 0.0.0.0:8080 -t public
 ```
 
-Открыть: `http://localhost:8080`
+Откройте: `http://localhost:8080`
 
-## Примечания
+## 5) Как пользоваться интерфейсом
 
-Если в ответах API не хватает точной структуры, в коде есть пометки:
+1. Зарегистрируйтесь.
+2. Войдите в аккаунт.
+3. Добавьте магазин (имя + API-ключи Ozon).
+4. Выберите магазин и период.
+5. Нажмите «Обновить дашборд».
 
-```php
-// TODO(api-doc-gap)
+Результат сохраняется в `storage/data/user_<id>_store_<id>.json`.
+
+## 6) CLI режим (опционально)
+
+```bash
+php bin/run.php
 ```
+
+Сохраняет результат в `storage/data/unified.json`.
+
+## Покрытие API
+
+- `POST /api/client/token`
+- `GET /api/client/campaign` (фильтр CPC: `advObjectType=SKU`)
+- `GET /api/client/campaign/{campaignId}/objects`
+- `GET /api/client/campaign/{campaignId}/v2/products`
+- `POST /api/client/statistic/products/generate`
+- `POST /api/client/statistic/orders/generate`
+- `GET /api/client/statistics/{UUID}`
+- `POST /v1/analytics/data`
+- `POST /v1/analytics/product-queries`
+- `POST /v1/finance/realization/by-day`

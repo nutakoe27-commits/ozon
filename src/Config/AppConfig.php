@@ -9,68 +9,60 @@ use RuntimeException;
 
 final class AppConfig
 {
-    /** @var string */
     public $performanceBaseUrl;
-    /** @var string */
     public $performanceClientId;
-    /** @var string */
     public $performanceClientSecret;
-    /** @var string */
     public $sellerBaseUrl;
-    /** @var string */
     public $sellerClientId;
-    /** @var string */
     public $sellerApiKey;
-    /** @var string */
     public $dateFrom;
-    /** @var string */
     public $dateTo;
-    /** @var int */
     public $analyticsRequestIntervalMs;
 
-    public function __construct(
-        $performanceBaseUrl,
-        $performanceClientId,
-        $performanceClientSecret,
-        $sellerBaseUrl,
-        $sellerClientId,
-        $sellerApiKey,
-        $dateFrom,
-        $dateTo,
-        $analyticsRequestIntervalMs
-    ) {
-        $this->performanceBaseUrl = $performanceBaseUrl;
-        $this->performanceClientId = $performanceClientId;
-        $this->performanceClientSecret = $performanceClientSecret;
-        $this->sellerBaseUrl = $sellerBaseUrl;
-        $this->sellerClientId = $sellerClientId;
-        $this->sellerApiKey = $sellerApiKey;
-        $this->dateFrom = $dateFrom;
-        $this->dateTo = $dateTo;
-        $this->analyticsRequestIntervalMs = (int)$analyticsRequestIntervalMs;
+    public $dbHost;
+    public $dbPort;
+    public $dbName;
+    public $dbUser;
+    public $dbPassword;
+
+    public function __construct(array $data)
+    {
+        foreach ($data as $k => $v) {
+            $this->{$k} = $v;
+        }
     }
 
-    /** @return self */
     public static function fromEnv()
     {
-        $cfg = new self(
-            self::env('OZON_PERFORMANCE_BASE_URL', 'https://api-performance.ozon.ru'),
-            self::envRequired('OZON_PERFORMANCE_CLIENT_ID'),
-            self::envRequired('OZON_PERFORMANCE_CLIENT_SECRET'),
-            self::env('OZON_SELLER_BASE_URL', 'https://api-seller.ozon.ru'),
-            self::envRequired('OZON_SELLER_CLIENT_ID'),
-            self::envRequired('OZON_SELLER_API_KEY'),
-            self::envRequired('OZON_DATE_FROM'),
-            self::envRequired('OZON_DATE_TO'),
-            self::env('OZON_ANALYTICS_REQUEST_INTERVAL_MS', '60000')
-        );
+        $cfg = new self(array(
+            'performanceBaseUrl' => self::env('OZON_PERFORMANCE_BASE_URL', 'https://api-performance.ozon.ru'),
+            'performanceClientId' => self::env('OZON_PERFORMANCE_CLIENT_ID', ''),
+            'performanceClientSecret' => self::env('OZON_PERFORMANCE_CLIENT_SECRET', ''),
+            'sellerBaseUrl' => self::env('OZON_SELLER_BASE_URL', 'https://api-seller.ozon.ru'),
+            'sellerClientId' => self::env('OZON_SELLER_CLIENT_ID', ''),
+            'sellerApiKey' => self::env('OZON_SELLER_API_KEY', ''),
+            'dateFrom' => self::env('OZON_DATE_FROM', date('Y-m-d', strtotime('-7 days'))),
+            'dateTo' => self::env('OZON_DATE_TO', date('Y-m-d')),
+            'analyticsRequestIntervalMs' => (int)self::env('OZON_ANALYTICS_REQUEST_INTERVAL_MS', '60000'),
+            'dbHost' => self::env('DB_HOST', '127.0.0.1'),
+            'dbPort' => self::env('DB_PORT', '3306'),
+            'dbName' => self::env('DB_NAME', 'ozon_dashboard'),
+            'dbUser' => self::env('DB_USER', 'root'),
+            'dbPassword' => self::env('DB_PASSWORD', ''),
+        ));
 
-        $cfg->validate();
-
+        $cfg->validateCommon();
         return $cfg;
     }
 
-    private function validate()
+    public function validateForCliSecrets()
+    {
+        if ($this->performanceClientId === '' || $this->performanceClientSecret === '' || $this->sellerClientId === '' || $this->sellerApiKey === '') {
+            throw new RuntimeException('For CLI mode set OZON_* API credentials in env');
+        }
+    }
+
+    private function validateCommon()
     {
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $this->dateFrom) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $this->dateTo)) {
             throw new RuntimeException('OZON_DATE_FROM and OZON_DATE_TO must be in YYYY-MM-DD format');
@@ -78,7 +70,6 @@ final class AppConfig
 
         $from = new DateTimeImmutable($this->dateFrom . ' 00:00:00');
         $to = new DateTimeImmutable($this->dateTo . ' 00:00:00');
-
         if ($to < $from) {
             throw new RuntimeException('OZON_DATE_TO must be same or later than OZON_DATE_FROM');
         }
@@ -87,20 +78,6 @@ final class AppConfig
         if ($days > 62) {
             throw new RuntimeException('Performance API limit exceeded: period must be <= 62 days');
         }
-
-        if ($this->analyticsRequestIntervalMs < 0) {
-            throw new RuntimeException('OZON_ANALYTICS_REQUEST_INTERVAL_MS must be >= 0');
-        }
-    }
-
-    private static function envRequired($key)
-    {
-        $value = getenv($key);
-        if ($value === false || trim($value) === '') {
-            throw new RuntimeException('Missing required env: ' . $key);
-        }
-
-        return $value;
     }
 
     private static function env($key, $default)
@@ -109,7 +86,6 @@ final class AppConfig
         if ($value === false || trim($value) === '') {
             return $default;
         }
-
         return $value;
     }
 }

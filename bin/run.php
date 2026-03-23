@@ -16,6 +16,7 @@ use Ozon\Service\StatisticsService;
 require __DIR__ . '/../src/bootstrap.php';
 
 $config = AppConfig::fromEnv();
+$config->validateForCliSecrets();
 
 $authClient = new HttpClient($config->performanceBaseUrl);
 $authService = new PerformanceAuthService($authClient, $config->performanceClientId, $config->performanceClientSecret);
