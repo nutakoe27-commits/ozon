@@ -20,100 +20,108 @@ require __DIR__ . '/../src/bootstrap.php';
 
 session_start();
 
-$config = AppConfig::fromEnv();
-$pdo = Database::pdo($config->dbHost, $config->dbPort, $config->dbName, $config->dbUser, $config->dbPassword);
-$userRepo = new UserRepository($pdo);
-$storeRepo = new StoreRepository($pdo);
-$auth = new AuthService($userRepo);
-
 $error = null;
 $success = null;
-
-$action = isset($_POST['action']) ? $_POST['action'] : null;
-if ($action === 'register') {
-    list($ok, $msg) = $auth->register(trim((string)$_POST['email']), (string)$_POST['password']);
-    if (!$ok) { $error = $msg; } else { $success = 'Регистрация успешна'; }
-}
-if ($action === 'login') {
-    list($ok, $msg) = $auth->login(trim((string)$_POST['email']), (string)$_POST['password']);
-    if (!$ok) { $error = $msg; } else { $success = 'Вход выполнен'; }
-}
-if ($action === 'logout') {
-    $auth->logout();
-}
-
-$user = $auth->currentUser();
-
-if ($user && $action === 'add_store') {
-    $name = trim((string)$_POST['name']);
-    if ($name === '') {
-        $error = 'Название магазина обязательно';
-    } else {
-        $storeRepo->create(
-            (int)$user['id'],
-            $name,
-            trim((string)$_POST['performance_client_id']),
-            trim((string)$_POST['performance_client_secret']),
-            trim((string)$_POST['seller_client_id']),
-            trim((string)$_POST['seller_api_key'])
-        );
-        $success = 'Магазин добавлен';
-    }
-}
-
+$user = null;
 $rows = array();
-$stores = $user ? $storeRepo->allByUser((int)$user['id']) : array();
-$selectedStoreId = isset($_GET['store_id']) ? (int)$_GET['store_id'] : (isset($_POST['store_id']) ? (int)$_POST['store_id'] : 0);
+$stores = array();
+$selectedStoreId = 0;
+$config = null;
 
-if ($user && $action === 'load_data' && $selectedStoreId > 0) {
-    $store = $storeRepo->findOwnedById((int)$user['id'], $selectedStoreId);
-    if ($store === null) {
-        $error = 'Магазин не найден';
-    } else {
-        try {
-            $dateFrom = isset($_POST['date_from']) && $_POST['date_from'] !== '' ? $_POST['date_from'] : $config->dateFrom;
-            $dateTo = isset($_POST['date_to']) && $_POST['date_to'] !== '' ? $_POST['date_to'] : $config->dateTo;
+try {
+    $config = AppConfig::fromEnv();
+    $pdo = Database::pdo($config->dbHost, $config->dbPort, $config->dbName, $config->dbUser, $config->dbPassword);
+    $userRepo = new UserRepository($pdo);
+    $storeRepo = new StoreRepository($pdo);
+    $auth = new AuthService($userRepo);
 
-            $authClient = new HttpClient($config->performanceBaseUrl);
-            $authService = new PerformanceAuthService($authClient, $store['performance_client_id'], $store['performance_client_secret']);
-            $token = $authService->getAccessToken();
+    $action = isset($_POST['action']) ? $_POST['action'] : null;
+    if ($action === 'register') {
+        list($ok, $msg) = $auth->register(trim((string)$_POST['email']), (string)$_POST['password']);
+        if (!$ok) { $error = $msg; } else { $success = 'Регистрация успешна'; }
+    }
+    if ($action === 'login') {
+        list($ok, $msg) = $auth->login(trim((string)$_POST['email']), (string)$_POST['password']);
+        if (!$ok) { $error = $msg; } else { $success = 'Вход выполнен'; }
+    }
+    if ($action === 'logout') {
+        $auth->logout();
+    }
 
-            $performanceClient = new HttpClient($config->performanceBaseUrl, array('Authorization' => 'Bearer ' . $token));
-            $sellerClient = new HttpClient($config->sellerBaseUrl, array(
-                'Client-Id' => $store['seller_client_id'],
-                'Api-Key' => $store['seller_api_key'],
-            ));
+    $user = $auth->currentUser();
 
-            $pipeline = new OzonDashboardPipeline(
-                new CampaignService($performanceClient),
-                new ProductService($performanceClient),
-                new StatisticsService($performanceClient),
-                new AnalyticsService($sellerClient, $config->analyticsRequestIntervalMs),
-                new MergeAdapter()
+    if ($user && $action === 'add_store') {
+        $name = trim((string)$_POST['name']);
+        if ($name === '') {
+            $error = 'Название магазина обязательно';
+        } else {
+            $storeRepo->create(
+                (int)$user['id'],
+                $name,
+                trim((string)$_POST['performance_client_id']),
+                trim((string)$_POST['performance_client_secret']),
+                trim((string)$_POST['seller_client_id']),
+                trim((string)$_POST['seller_api_key'])
             );
-
-            $result = $pipeline->run($dateFrom, $dateTo);
-            $rows = isset($result['unified']) && is_array($result['unified']) ? $result['unified'] : array();
-
-            $dataDir = __DIR__ . '/../storage/data';
-            if (!is_dir($dataDir)) { mkdir($dataDir, 0777, true); }
-            $path = $dataDir . '/user_' . (int)$user['id'] . '_store_' . (int)$store['id'] . '.json';
-            file_put_contents($path, json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-            $success = 'Данные загружены. Записано в ' . basename($path);
-        } catch (Exception $e) {
-            $error = $e->getMessage();
+            $success = 'Магазин добавлен';
         }
     }
-}
 
-if ($user && $selectedStoreId > 0 && $rows === array()) {
-    $path = __DIR__ . '/../storage/data/user_' . (int)$user['id'] . '_store_' . $selectedStoreId . '.json';
-    if (is_file($path)) {
-        $payload = json_decode((string)file_get_contents($path), true);
-        if (is_array($payload) && isset($payload['unified']) && is_array($payload['unified'])) {
-            $rows = $payload['unified'];
+    $stores = $user ? $storeRepo->allByUser((int)$user['id']) : array();
+    $selectedStoreId = isset($_GET['store_id']) ? (int)$_GET['store_id'] : (isset($_POST['store_id']) ? (int)$_POST['store_id'] : 0);
+
+    if ($user && $action === 'load_data' && $selectedStoreId > 0) {
+        $store = $storeRepo->findOwnedById((int)$user['id'], $selectedStoreId);
+        if ($store === null) {
+            $error = 'Магазин не найден';
+        } else {
+            try {
+                $dateFrom = isset($_POST['date_from']) && $_POST['date_from'] !== '' ? $_POST['date_from'] : $config->dateFrom;
+                $dateTo = isset($_POST['date_to']) && $_POST['date_to'] !== '' ? $_POST['date_to'] : $config->dateTo;
+
+                $authClient = new HttpClient($config->performanceBaseUrl);
+                $authService = new PerformanceAuthService($authClient, $store['performance_client_id'], $store['performance_client_secret']);
+                $token = $authService->getAccessToken();
+
+                $performanceClient = new HttpClient($config->performanceBaseUrl, array('Authorization' => 'Bearer ' . $token));
+                $sellerClient = new HttpClient($config->sellerBaseUrl, array(
+                    'Client-Id' => $store['seller_client_id'],
+                    'Api-Key' => $store['seller_api_key'],
+                ));
+
+                $pipeline = new OzonDashboardPipeline(
+                    new CampaignService($performanceClient),
+                    new ProductService($performanceClient),
+                    new StatisticsService($performanceClient),
+                    new AnalyticsService($sellerClient, $config->analyticsRequestIntervalMs),
+                    new MergeAdapter()
+                );
+
+                $result = $pipeline->run($dateFrom, $dateTo);
+                $rows = isset($result['unified']) && is_array($result['unified']) ? $result['unified'] : array();
+
+                $dataDir = __DIR__ . '/../storage/data';
+                if (!is_dir($dataDir)) { mkdir($dataDir, 0777, true); }
+                $path = $dataDir . '/user_' . (int)$user['id'] . '_store_' . (int)$store['id'] . '.json';
+                file_put_contents($path, json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                $success = 'Данные загружены. Записано в ' . basename($path);
+            } catch (Throwable $e) {
+                $error = $e->getMessage();
+            }
         }
     }
+
+    if ($user && $selectedStoreId > 0 && $rows === array()) {
+        $path = __DIR__ . '/../storage/data/user_' . (int)$user['id'] . '_store_' . $selectedStoreId . '.json';
+        if (is_file($path)) {
+            $payload = json_decode((string)file_get_contents($path), true);
+            if (is_array($payload) && isset($payload['unified']) && is_array($payload['unified'])) {
+                $rows = $payload['unified'];
+            }
+        }
+    }
+} catch (Throwable $e) {
+    $error = $e->getMessage();
 }
 ?>
 <!doctype html>
@@ -139,7 +147,7 @@ a{color:#93c5fd}
 <body>
 <div class="wrap">
   <h1>Ozon Dashboard</h1>
-  <?php if ($error): ?><div class="card err"><?= htmlspecialchars($error) ?></div><?php endif; ?>
+  <?php if ($error): ?><div class="card err">Ошибка: <?= htmlspecialchars($error) ?></div><?php endif; ?>
   <?php if ($success): ?><div class="card good"><?= htmlspecialchars($success) ?></div><?php endif; ?>
 
   <?php if (!$user): ?>
@@ -194,8 +202,8 @@ a{color:#93c5fd}
             </option>
           <?php endforeach; ?>
         </select>
-        <input type="date" name="date_from" value="<?= htmlspecialchars($config->dateFrom) ?>">
-        <input type="date" name="date_to" value="<?= htmlspecialchars($config->dateTo) ?>">
+        <input type="date" name="date_from" value="<?= htmlspecialchars($config ? $config->dateFrom : date('Y-m-d', strtotime('-7 days'))) ?>">
+        <input type="date" name="date_to" value="<?= htmlspecialchars($config ? $config->dateTo : date('Y-m-d')) ?>">
         <button type="submit">Обновить дашборд</button>
       </form>
     </div>
@@ -207,15 +215,15 @@ a{color:#93c5fd}
         <tbody>
         <?php foreach ($rows as $r): ?>
           <tr>
-            <td><?= htmlspecialchars((string)$r['sku']) ?></td>
-            <td><?= htmlspecialchars((string)$r['day']) ?></td>
-            <td><?= htmlspecialchars((string)$r['ad']['impressions']) ?></td>
-            <td><?= htmlspecialchars((string)$r['ad']['clicks']) ?></td>
-            <td><?= htmlspecialchars((string)$r['ad']['spend']) ?></td>
-            <td><?= htmlspecialchars((string)$r['ad']['orders']) ?></td>
-            <td><?= htmlspecialchars((string)$r['ad']['revenue']) ?></td>
-            <td><?= htmlspecialchars((string)$r['computed']['ctr']) ?></td>
-            <td><?= htmlspecialchars((string)$r['computed']['roas']) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['sku']) ? $r['sku'] : '')) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['day']) ? $r['day'] : '')) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['ad']['impressions']) ? $r['ad']['impressions'] : 0)) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['ad']['clicks']) ? $r['ad']['clicks'] : 0)) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['ad']['spend']) ? $r['ad']['spend'] : 0)) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['ad']['orders']) ? $r['ad']['orders'] : 0)) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['ad']['revenue']) ? $r['ad']['revenue'] : 0)) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['computed']['ctr']) ? $r['computed']['ctr'] : 0)) ?></td>
+            <td><?= htmlspecialchars((string)(isset($r['computed']['roas']) ? $r['computed']['roas'] : 0)) ?></td>
           </tr>
         <?php endforeach; ?>
         </tbody>
