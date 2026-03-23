@@ -31,6 +31,10 @@ $userId = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : null;
 // ── Роутинг ───────────────────────────────────────────────────────────────────
 $method = $_SERVER['REQUEST_METHOD'];
 $path   = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+$scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+if ($scriptName !== '' && str_starts_with($path, $scriptName)) {
+    $path = substr($path, strlen($scriptName));
+}
 $path   = rtrim($path, '/') ?: '/';
 
 // ── Авторизация ───────────────────────────────────────────────────────────────

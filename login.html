@@ -264,7 +264,7 @@ function showAlert(text, success){
 function hideAlert(){ document.getElementById('alert').className = 'alert'; }
 
 async function requestJson(url, options = {}){
-  const resp = await fetch(url, options);
+  const resp = await fetch(appPath(url), options);
   const text = await resp.text();
   try {
     return { resp, data: text ? JSON.parse(text) : {} };
@@ -272,6 +272,22 @@ async function requestJson(url, options = {}){
     const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
     throw new Error(`Некорректный ответ сервера (${resp.status}): ${snippet || 'empty body'}`);
   }
+}
+
+function appPath(path){
+  const clean = String(path || '').replace(/^\/+/, '');
+  const current = window.location.pathname;
+  const indexMarker = '/index.php/';
+  const idx = current.indexOf(indexMarker);
+  if (idx >= 0) {
+    return current.slice(0, idx + indexMarker.length) + clean;
+  }
+
+  const segments = current.split('/').filter(Boolean);
+  const leaf = segments.length > 0 ? segments[segments.length - 1] : '';
+  const isLeafRoute = ['login', 'register', 'logout', 'dashboard.html'].includes(leaf);
+  const base = isLeafRoute ? current.replace(/[^/]+$/, '') : (current.endsWith('/') ? current : current + '/');
+  return base + clean;
 }
 </script>
 </body>

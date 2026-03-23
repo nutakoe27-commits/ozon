@@ -762,7 +762,7 @@ function showError(msg){ document.getElementById('errorText').textContent=msg; d
 function hideError(){ document.getElementById('errorBanner').classList.remove('show'); }
 function escapeHtml(v){ return String(v).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 async function requestJson(url, options = {}){
-  const resp = await fetch(url, options);
+  const resp = await fetch(appPath(url), options);
   const text = await resp.text();
   let data = null;
   try {
@@ -773,10 +773,22 @@ async function requestJson(url, options = {}){
   }
 
   if (resp.status === 401) {
-    window.location.href = 'login';
+    window.location.href = appPath('login');
   }
 
   return { resp, data };
+}
+function appPath(path){
+  const clean = String(path || '').replace(/^\/+/, '');
+  const current = window.location.pathname;
+  const indexMarker = '/index.php/';
+  const idx = current.indexOf(indexMarker);
+  if (idx >= 0) {
+    return current.slice(0, idx + indexMarker.length) + clean;
+  }
+
+  const base = current.endsWith('/') ? current : current.replace(/[^/]+$/, '');
+  return base + clean;
 }
 </script>
 </body>
