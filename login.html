@@ -235,14 +235,15 @@ async function submitForm(e, type){
   }
 
   try {
-    const resp = await fetch('/' + type, {
+    const { resp, data: json } = await requestJson(type, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({email, password}),
     });
-    const json = await resp.json();
 
-    if(json.error){
+    if(!resp.ok && !json.error){
+      showAlert('Ошибка сервера: HTTP ' + resp.status, false);
+    } else if(json.error){
       showAlert(json.error, false);
     } else if(json.redirect){
       showAlert(isLogin ? 'Добро пожаловать!' : 'Аккаунт создан!', true);
@@ -261,6 +262,33 @@ function showAlert(text, success){
   document.getElementById('alertText').textContent = text;
 }
 function hideAlert(){ document.getElementById('alert').className = 'alert'; }
+
+async function requestJson(url, options = {}){
+  const resp = await fetch(appPath(url), options);
+  const text = await resp.text();
+  try {
+    return { resp, data: text ? JSON.parse(text) : {} };
+  } catch (_) {
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`Некорректный ответ сервера (${resp.status}): ${snippet || 'empty body'}`);
+  }
+}
+
+function appPath(path){
+  const clean = String(path || '').replace(/^\/+/, '');
+  const current = window.location.pathname;
+  const indexMarker = '/index.php/';
+  const idx = current.indexOf(indexMarker);
+  if (idx >= 0) {
+    return current.slice(0, idx + indexMarker.length) + clean;
+  }
+
+  const segments = current.split('/').filter(Boolean);
+  const leaf = segments.length > 0 ? segments[segments.length - 1] : '';
+  const isLeafRoute = ['login', 'register', 'logout', 'dashboard.html'].includes(leaf);
+  const base = isLeafRoute ? current.replace(/[^/]+$/, '') : (current.endsWith('/') ? current : current + '/');
+  return base + clean;
+}
 </script>
 </body>
 </html>

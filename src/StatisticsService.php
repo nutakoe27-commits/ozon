@@ -1,5 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
+namespace Ozon;
+
+use RuntimeException;
+
 class StatisticsService
 {
     /** @var HttpClient */

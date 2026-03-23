@@ -251,9 +251,9 @@
   </div>
   <div class="header-right">
     <select class="store-select" id="storeSelect">
-      <option value="1">🏪 Магазин «Главный»</option>
-      <option value="2">🏪 Магазин «Тестовый»</option>
+      <option value="">🏪 Загрузка магазинов...</option>
     </select>
+    <button class="btn-refresh" type="button" onclick="addStore()" style="background:var(--card2);box-shadow:none;padding:8px 12px">+ Магазин</button>
     <div class="date-range">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
       <input type="date" id="dateFrom" value="2026-02-21">
@@ -404,6 +404,48 @@ let chartMode   = 'daily';
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => render(allRows));
+window.addEventListener('DOMContentLoaded', () => loadStores());
+
+async function loadStores(){
+  const select = document.getElementById('storeSelect');
+  try {
+    const { resp, data: json } = await requestJson('api/stores');
+    if (!resp.ok || !Array.isArray(json.stores)) throw new Error(json.error || 'Не удалось загрузить магазины');
+    if (json.stores.length === 0) {
+      select.innerHTML = '<option value="">🏪 Нет магазинов</option>';
+      showError('Сначала добавьте магазин через кнопку "+ Магазин"');
+      return;
+    }
+    select.innerHTML = json.stores.map(s => `<option value="${s.id}">🏪 ${escapeHtml(s.name)}</option>`).join('');
+  } catch (e) {
+    select.innerHTML = '<option value="">🏪 Ошибка загрузки</option>';
+    showError('Не удалось загрузить магазины: ' + e.message);
+  }
+}
+
+async function addStore(){
+  const name = prompt('Название магазина:');
+  if(!name) return;
+  const performance_client_id = prompt('Ozon Performance client_id:');
+  const performance_client_secret = prompt('Ozon Performance client_secret:');
+  const seller_client_id = prompt('Ozon Seller Client-Id:');
+  const seller_api_key = prompt('Ozon Seller Api-Key:');
+  if(!performance_client_id || !performance_client_secret || !seller_client_id || !seller_api_key){
+    showError('Все поля магазина обязательны');
+    return;
+  }
+  try{
+    const { resp, data: json } = await requestJson('api/stores', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, performance_client_id, performance_client_secret, seller_client_id, seller_api_key}),
+    });
+    if(!resp.ok || json.error) throw new Error(json.error || ('HTTP ' + resp.status));
+    await loadStores();
+  } catch(e){
+    showError('Не удалось создать магазин: ' + e.message);
+  }
+}
 
 // ── REFRESH (real fetch, fallback to mock) ────────────────────────────────────
 async function refreshDashboard(){
@@ -416,12 +458,11 @@ async function refreshDashboard(){
   const dateTo   = document.getElementById('dateTo').value;
 
   try {
-    const resp = await fetch('/api/dashboard/refresh', {
+    const { resp, data: json } = await requestJson('api/dashboard/refresh', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({store_id:storeId, date_from:dateFrom, date_to:dateTo}),
     });
-    const json = await resp.json();
     if (!resp.ok || json.error){
       showError(json.error || 'Ошибка сервера ' + resp.status);
       render(MOCK_UNIFIED); // показываем демо-данные даже при ошибке
@@ -719,6 +760,36 @@ function fmtK(n){ n=+n; return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFi
 function fmtRub(n){ return '₽'+fmtK(n); }
 function showError(msg){ document.getElementById('errorText').textContent=msg; document.getElementById('errorBanner').classList.add('show'); }
 function hideError(){ document.getElementById('errorBanner').classList.remove('show'); }
+function escapeHtml(v){ return String(v).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+async function requestJson(url, options = {}){
+  const resp = await fetch(appPath(url), options);
+  const text = await resp.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_) {
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`Некорректный ответ сервера (${resp.status}): ${snippet || 'empty body'}`);
+  }
+
+  if (resp.status === 401) {
+    window.location.href = appPath('login');
+  }
+
+  return { resp, data };
+}
+function appPath(path){
+  const clean = String(path || '').replace(/^\/+/, '');
+  const current = window.location.pathname;
+  const indexMarker = '/index.php/';
+  const idx = current.indexOf(indexMarker);
+  if (idx >= 0) {
+    return current.slice(0, idx + indexMarker.length) + clean;
+  }
+
+  const base = current.endsWith('/') ? current : current.replace(/[^/]+$/, '');
+  return base + clean;
+}
 </script>
 </body>
 </html>

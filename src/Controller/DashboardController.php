@@ -32,8 +32,33 @@ final class DashboardController
     public function getStores(int $userId): void
     {
         $rows   = $this->storeRepo->allByUser($userId);
-        $stores = array_map(fn($r) => ['id' => $r['id'], 'name' => $r['name']], $rows);
+        $stores = array_map(function ($r) {
+            return ['id' => $r['id'], 'name' => $r['name']];
+        }, $rows);
         $this->json(['stores' => $stores]);
+    }
+
+    public function createStore(int $userId): void
+    {
+        $body = $this->parseJsonBody();
+        $required = ['name', 'performance_client_id', 'performance_client_secret', 'seller_client_id', 'seller_api_key'];
+        foreach ($required as $key) {
+            if (trim((string)($body[$key] ?? '')) === '') {
+                $this->jsonError($key . ' is required', 400);
+                return;
+            }
+        }
+
+        $storeId = $this->storeRepo->create(
+            $userId,
+            trim((string)$body['name']),
+            trim((string)$body['performance_client_id']),
+            trim((string)$body['performance_client_secret']),
+            trim((string)$body['seller_client_id']),
+            trim((string)$body['seller_api_key'])
+        );
+
+        $this->json(['ok' => true, 'store_id' => $storeId]);
     }
 
     // ── POST /api/dashboard/refresh ───────────────────────────────────────────
@@ -67,7 +92,10 @@ final class DashboardController
         // ── Сборка зависимостей ───────────────────────────────────────────────
 
         // 1. Performance API клиент с авторизацией
-        $authClient = new HttpClient('https://performance.ozon.ru');
+        $performanceBaseUrl = (string)(getenv('OZON_PERFORMANCE_BASE_URL') ?: 'https://api-performance.ozon.ru');
+        $sellerBaseUrl = (string)(getenv('OZON_SELLER_BASE_URL') ?: 'https://api-seller.ozon.ru');
+
+        $authClient = new HttpClient($performanceBaseUrl);
         $authSvc    = new PerformanceAuthService(
             $authClient,
             $store['performance_client_id'],
@@ -75,12 +103,12 @@ final class DashboardController
         );
         $token = $authSvc->getAccessToken();
 
-        $perfClient = new HttpClient('https://performance.ozon.ru', [
+        $perfClient = new HttpClient($performanceBaseUrl, [
             'Authorization' => 'Bearer ' . $token,
         ]);
 
         // 2. Seller API клиент
-        $sellerClient = new HttpClient('https://api-seller.ozon.ru', [
+        $sellerClient = new HttpClient($sellerBaseUrl, [
             'Client-Id' => $store['seller_client_id'],
             'Api-Key'   => $store['seller_api_key'],
         ]);

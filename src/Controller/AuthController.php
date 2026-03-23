@@ -20,7 +20,7 @@ final class AuthController
     {
         // Уже залогинен — редирект на дашборд
         if (!empty($_SESSION['user_id'])) {
-            header('Location: /');
+            header('Location: ./');
             exit;
         }
         readfile(__DIR__ . '/../../login.html');
@@ -50,7 +50,7 @@ final class AuthController
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['email']   = $user['email'];
 
-        $this->json(['ok' => true, 'redirect' => '/']);
+        $this->json(['ok' => true, 'redirect' => './']);
     }
 
     // ── POST /logout ──────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ final class AuthController
                 $p['path'], $p['domain'], $p['secure'], $p['httponly']);
         }
         session_destroy();
-        $this->json(['ok' => true, 'redirect' => '/login']);
+        $this->json(['ok' => true, 'redirect' => 'login']);
     }
 
     // ── POST /register ────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ final class AuthController
         $_SESSION['user_id'] = $userId;
         $_SESSION['email']   = $email;
 
-        $this->json(['ok' => true, 'redirect' => '/']);
+        $this->json(['ok' => true, 'redirect' => './']);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

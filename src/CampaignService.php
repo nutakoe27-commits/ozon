@@ -2,9 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Ozon\Service;
-
-use Ozon\Http\HttpClient;
+namespace Ozon;
 
 final class CampaignService
 {

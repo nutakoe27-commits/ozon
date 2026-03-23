@@ -47,7 +47,7 @@ export OZON_ANALYTICS_REQUEST_INTERVAL_MS="60000"
 ## 4) Запуск веба
 
 ```bash
-php -S 0.0.0.0:8080 -t public
+php -S 0.0.0.0:8080 index.php
 ```
 
 Откройте: `http://localhost:8080`

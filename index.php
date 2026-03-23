@@ -14,10 +14,15 @@ declare(strict_types=1);
  *   POST /api/dashboard/refresh   → DashboardController::refresh
  */
 
+function ozon_starts_with($haystack, $needle)
+{
+    return $needle === '' || strpos((string)$haystack, (string)$needle) === 0;
+}
+
 // ── Автозагрузка ──────────────────────────────────────────────────────────────
 spl_autoload_register(function (string $class): void {
     $prefix = 'Ozon\\';
-    if (str_starts_with($class, $prefix)) {
+    if (ozon_starts_with($class, $prefix)) {
         $relative = str_replace('\\', '/', substr($class, strlen($prefix)));
         $file = __DIR__ . '/src/' . $relative . '.php';
         if (file_exists($file)) require_once $file;
@@ -31,10 +36,14 @@ $userId = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : null;
 // ── Роутинг ───────────────────────────────────────────────────────────────────
 $method = $_SERVER['REQUEST_METHOD'];
 $path   = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+$scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+if ($scriptName !== '' && ozon_starts_with($path, $scriptName)) {
+    $path = substr($path, strlen($scriptName));
+}
 $path   = rtrim($path, '/') ?: '/';
 
 // ── Авторизация ───────────────────────────────────────────────────────────────
-if (in_array($path, ['/login'], true) || in_array($path, ['/login', '/register'], true)) {
+if (in_array($path, ['/login', '/register'], true)) {
     $pdo      = require __DIR__ . '/config/db.php';
     $userRepo = new \Ozon\UserRepository($pdo);
     $auth     = new \Ozon\Controller\AuthController($userRepo);
@@ -55,14 +64,14 @@ if ($path === '/logout' && $method === 'POST') {
 // ── Защищённые маршруты (требуют сессии) ──────────────────────────────────────
 if ($userId === null) {
     // API → 401 JSON
-    if (str_starts_with($path, '/api/')) {
+    if (ozon_starts_with($path, '/api/')) {
         http_response_code(401);
         header('Content-Type: application/json');
         echo json_encode(['error' => 'Unauthorized']);
         exit;
     }
     // Всё остальное → редирект на логин
-    header('Location: /login');
+    header('Location: login');
     exit;
 }
 
@@ -73,13 +82,17 @@ if ($path === '/' && $method === 'GET') {
 }
 
 // ── API маршруты ──────────────────────────────────────────────────────────────
-if (str_starts_with($path, '/api/')) {
+if (ozon_starts_with($path, '/api/')) {
     $pdo        = require __DIR__ . '/config/db.php';
     $storeRepo  = new \Ozon\StoreRepository($pdo);
     $controller = new \Ozon\Controller\DashboardController($storeRepo);
 
     if ($path === '/api/stores' && $method === 'GET') {
         $controller->getStores($userId);
+        exit;
+    }
+    if ($path === '/api/stores' && $method === 'POST') {
+        $controller->createStore($userId);
         exit;
     }
     if ($path === '/api/dashboard/refresh' && $method === 'POST') {

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Ozon\Config;
+namespace Ozon;
 
 use DateTimeImmutable;
 use RuntimeException;

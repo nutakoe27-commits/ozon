@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Ozon\Repository;
+namespace Ozon;
 
 use PDO;
 
@@ -27,7 +27,7 @@ final class UserRepository
 
     public function create($email, $passwordHash)
     {
-        $stmt = $this->pdo->prepare('INSERT INTO users(email, password_hash, created_at) VALUES(:email, :password_hash, NOW())');
+        $stmt = $this->pdo->prepare('INSERT INTO users(email, password_hash, created_at) VALUES(:email, :password_hash, CURRENT_TIMESTAMP)');
         $stmt->execute(array(
             'email' => $email,
             'password_hash' => $passwordHash,
