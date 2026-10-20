@@ -1,0 +1,65 @@
+export type User = { id: string; email: string; name: string; role: 'admin' | 'student' };
+export type Course = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  color: 'sage' | 'peach' | 'blue' | 'lavender';
+  published: boolean;
+  self_enroll: boolean;
+  enrolled: boolean;
+  total_lessons: number;
+  completed_lessons: number;
+  duration_seconds: number;
+  lessons?: Lesson[];
+};
+export type Question = {
+  id: string;
+  prompt: string;
+  options: string[];
+  correctIndex?: number;
+  explanation?: string;
+};
+export type Zone = { x: number; y: number; width: number; height: number };
+export type Lesson = {
+  id: string;
+  course_id: string;
+  title: string;
+  type: 'video' | 'quiz' | 'hotspot';
+  position: number;
+  body: string;
+  video_id: string | null;
+  image_id: string | null;
+  activity: {
+    questions?: Question[];
+    passPercent?: number;
+    instruction?: string;
+    target?: Zone;
+    explanation?: string;
+  };
+  completed_at?: string | null;
+  score?: number | null;
+  position_seconds?: number;
+  watched_seconds?: number;
+  video_status?: string;
+  video_error?: string;
+  duration?: number;
+};
+export type Media = {
+  id: string;
+  name: string;
+  kind: 'video' | 'image';
+  status: string;
+  duration?: number;
+  error?: string;
+  created_at: string;
+};
+export type Dashboard = {
+  xp: number;
+  level: number;
+  completed_lessons: number;
+  watched_seconds: number;
+  enrolled: number;
+  activityDays: string[];
+  certificates: { id: string; title: string; issued_at: string }[];
+};

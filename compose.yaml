@@ -1,0 +1,102 @@
+name: praktika
+x-app: &app
+  image: praktika:local
+  build: .
+  restart: unless-stopped
+  environment: &environment
+    NODE_ENV: production
+    APP_URL: https://${DOMAIN:?Set DOMAIN in .env}
+    DATABASE_URL: postgresql://praktika:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/praktika
+    MEDIA_ROOT: /app/data
+    UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-10737418240}
+    TRANSCODE_THREADS: ${TRANSCODE_THREADS:-1}
+    MAX_VIDEO_HEIGHT: ${MAX_VIDEO_HEIGHT:-720}
+    REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
+    DISK_RESERVE_BYTES: ${DISK_RESERVE_BYTES:-2147483648}
+    NODE_OPTIONS: --max-old-space-size=256
+  volumes:
+    - media:/app/data
+  depends_on:
+    db:
+      condition: service_healthy
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: praktika
+      POSTGRES_DB: praktika
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    command: postgres -c shared_buffers=64MB -c work_mem=2MB -c max_connections=30 -c maintenance_work_mem=32MB
+    volumes:
+      - db:/var/lib/postgresql/data
+    mem_limit: 256m
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U praktika -d praktika']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  app:
+    <<: *app
+    environment:
+      <<: *environment
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+    mem_limit: 384m
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+  worker:
+    <<: *app
+    command: [node, dist/server/worker.js]
+    cpus: 1.0
+    mem_limit: 768m
+    pids_limit: 128
+    stop_grace_period: 2m
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 96m
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+volumes:
+  db:
+  media:
+  caddy_data:
+  caddy_config:
