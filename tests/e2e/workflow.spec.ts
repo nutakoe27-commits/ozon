@@ -158,3 +158,81 @@ test('browser upload enters the persistent processing queue and becomes playable
     await rm(folder, { recursive: true, force: true });
   }
 });
+test('course deletion confirms, cancels and retries before removing a course already in progress', async ({
+  page,
+  request,
+}) => {
+  await login(page);
+  const title = `Удаление начатого курса ${stamp}`;
+  const course = await adminApi(page, '/api/courses', { title });
+  const activity = {
+    passPercent: 100,
+    questions: [
+      {
+        id: 'q',
+        prompt: 'Как действовать безопасно?',
+        options: ['Остановиться', 'Продолжить'],
+        correctIndex: 0,
+      },
+    ],
+  };
+  const first = await adminApi(page, `/api/courses/${course.id}/lessons`, {
+    title: 'Первое задание',
+    type: 'quiz',
+    activity,
+  });
+  await adminApi(page, `/api/courses/${course.id}/lessons`, {
+    title: 'Второе задание',
+    type: 'quiz',
+    position: 1,
+    activity,
+  });
+  await adminApi(page, `/api/courses/${course.id}`, { published: true }, 'PATCH');
+  const loginResponse = await request.post('/api/auth/login', {
+    data: { email: 'student@praktika.test', password: 'DemoStudent2026!' },
+  });
+  expect(loginResponse.ok()).toBeTruthy();
+  const { csrf } = await loginResponse.json();
+  const headers = { 'x-csrf-token': csrf };
+  expect((await request.post(`/api/courses/${course.id}/enroll`, { headers })).ok()).toBeTruthy();
+  const attempt = await request.post(`/api/lessons/${first.id}/attempt`, {
+    headers,
+    data: { response: { q: 0 } },
+  });
+  const result = await attempt.json();
+  expect(result.passed).toBe(true);
+  expect(result.certificateId).toBeNull();
+
+  await page.goto(`/admin/courses/${course.id}`);
+  await page.getByRole('button', { name: 'Удалить курс', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Удаление курса' });
+  await expect(
+    dialog.getByText(`Вы собираетесь удалить курс «${title}».`, { exact: true }),
+  ).toBeVisible();
+  await expect(dialog.getByText(/выданные сертификаты/)).toBeVisible();
+  await expect(dialog.getByText(/Видео и изображения останутся в медиатеке/)).toBeVisible();
+  await dialog.getByRole('button', { name: 'Отмена', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect((await page.request.get(`/api/courses/${course.id}`)).ok()).toBeTruthy();
+
+  const url = `**/api/courses/${course.id}`;
+  await page.route(url, async (route) => {
+    if (route.request().method() === 'DELETE')
+      await route.fulfill({
+        status: 503,
+        json: { error: 'Не удалось удалить курс. Повторите попытку.' },
+      });
+    else await route.continue();
+  });
+  await page.getByRole('button', { name: 'Удалить курс', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Да, удалить курс', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Не удалось удалить курс. Повторите попытку.');
+  await expect(dialog).toBeVisible();
+  expect((await page.request.get(`/api/courses/${course.id}`)).ok()).toBeTruthy();
+  await page.unroute(url);
+  await dialog.getByRole('button', { name: 'Да, удалить курс', exact: true }).click();
+  await expect(page).toHaveURL(/\/admin\/courses$/);
+  await expect(page.getByRole('heading', { name: title, exact: true })).toHaveCount(0);
+  expect((await page.request.get(`/api/courses/${course.id}`)).status()).toBe(404);
+  expect((await request.get(`/api/courses/${course.id}`)).status()).toBe(404);
+});

@@ -326,6 +326,16 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
     );
     return updated;
   });
+  app.delete('/api/courses/:id', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as any;
+    const { confirm } = z.object({ confirm: z.boolean().default(false) }).parse(request.body ?? {});
+    if (!confirm) throw new HttpError(400, 'Подтвердите удаление курса');
+    // Foreign keys remove the course's learning records atomically; media can be shared.
+    const [deleted] = await sql('DELETE FROM courses WHERE id=$1 RETURNING id', [id]);
+    if (!deleted) throw new HttpError(404, 'Курс не найден');
+    return { ok: true };
+  });
   app.post('/api/courses/:id/copy', async (request) => {
     const user = requireAdmin(request);
     const { id } = request.params as any;

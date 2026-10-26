@@ -476,5 +476,117 @@ test('password reset revokes existing sessions', async () => {
   });
   assert.equal(r.statusCode, 200, r.body);
   assert.equal((await request('GET', '/api/auth/me', student)).statusCode, 401);
-  await login('student@test.local', 'NewPasswordForTest2026!');
+  student = await login('student@test.local', 'NewPasswordForTest2026!');
+});
+test('course deletion requires an administrator, CSRF and explicit confirmation', async () => {
+  const url = `/api/courses/${courseId}`;
+  assert.equal((await request('DELETE', url, {}, { confirm: true })).statusCode, 401);
+  assert.equal((await request('DELETE', url, student, { confirm: true })).statusCode, 403);
+  assert.equal(
+    (await request('DELETE', url, { cookie: admin.cookie }, { confirm: true })).statusCode,
+    403,
+  );
+  assert.equal((await request('DELETE', url, admin)).statusCode, 400);
+  assert.equal((await request('DELETE', url, admin, { confirm: false })).statusCode, 400);
+  assert.equal((await request('GET', url, admin)).statusCode, 200);
+});
+test('a published course in progress can be deleted without affecting shared media or other courses', async () => {
+  const created = await request('POST', '/api/courses', admin, { title: 'Удаляемый начатый курс' });
+  assert.equal(created.statusCode, 201, created.body);
+  const id = created.json().id;
+  const video = await request('POST', `/api/courses/${id}/lessons`, admin, {
+    title: 'Ещё не пройденное видео',
+    type: 'video',
+    video_id: uploadId,
+  });
+  const exercise = await request('POST', `/api/courses/${id}/lessons`, admin, {
+    title: 'Пройденное задание',
+    type: 'quiz',
+    position: 1,
+    activity: quiz,
+  });
+  assert.equal(video.statusCode, 201, video.body);
+  assert.equal(exercise.statusCode, 201, exercise.body);
+  assert.equal(
+    (await request('PATCH', `/api/courses/${id}`, admin, { published: true })).statusCode,
+    200,
+  );
+  await request('POST', `/api/courses/${id}/enrollments`, admin, { userIds: [studentId] });
+  await request('POST', `/api/lessons/${video.json().id}/progress`, student, { position: 0 });
+  const attempt = await request('POST', `/api/lessons/${exercise.json().id}/attempt`, student, {
+    response: { q1: 1 },
+  });
+  assert.equal(attempt.json().passed, true);
+  assert.equal(attempt.json().certificateId, null);
+  const [before] = await sql(
+    'SELECT count(*)::int AS count FROM progress WHERE lesson_id IN ($1,$2)',
+    [video.json().id, exercise.json().id],
+  );
+  assert.equal(before.count, 2);
+
+  const deleted = await request('DELETE', `/api/courses/${id}`, admin, { confirm: true });
+  assert.equal(deleted.statusCode, 200, deleted.body);
+  assert.equal((await request('GET', `/api/courses/${id}`, student)).statusCode, 404);
+  assert.equal((await request('GET', `/api/courses/${id}`, admin)).statusCode, 404);
+  for (const table of ['lessons', 'enrollments']) {
+    assert.equal((await sql(`SELECT * FROM ${table} WHERE course_id=$1`, [id])).length, 0);
+  }
+  for (const table of ['progress', 'attempts']) {
+    assert.equal(
+      (
+        await sql(`SELECT * FROM ${table} WHERE lesson_id IN ($1,$2)`, [
+          video.json().id,
+          exercise.json().id,
+        ])
+      ).length,
+      0,
+    );
+  }
+  assert.equal((await request('GET', `/api/courses/${videoCourseId}`, student)).statusCode, 200);
+  assert.equal(
+    (await request('GET', `/api/media/${uploadId}/master.m3u8`, student)).statusCode,
+    200,
+  );
+  const report = await request('GET', '/api/reports', admin);
+  assert.equal(
+    report.json().some((row: any) => row.course_id === id),
+    false,
+  );
+});
+test('deleting a completed course removes its certificates and XP, but preserves the learner account', async () => {
+  const [certificate] = await sql('SELECT id FROM certificates WHERE course_id=$1 AND user_id=$2', [
+    courseId,
+    studentId,
+  ]);
+  assert.ok(certificate);
+  assert.equal(
+    (await request('PATCH', `/api/courses/${courseId}`, admin, { published: true })).statusCode,
+    200,
+  );
+  const response = await request('DELETE', `/api/courses/${courseId}`, admin, { confirm: true });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(
+    (await request('GET', `/api/certificates/${certificate.id}`, admin)).statusCode,
+    404,
+  );
+  assert.equal((await sql('SELECT * FROM certificates WHERE course_id=$1', [courseId])).length, 0);
+  for (const table of ['progress', 'attempts']) {
+    assert.equal(
+      (await sql(`SELECT * FROM ${table} WHERE lesson_id IN ($1,$2)`, [quizId, hotspotId])).length,
+      0,
+    );
+  }
+  const dashboard = await request('GET', '/api/dashboard', student);
+  assert.equal(dashboard.statusCode, 200, dashboard.body);
+  assert.equal(dashboard.json().xp, 30);
+  assert.equal(dashboard.json().certificates.length, 1);
+  assert.equal((await request('GET', '/api/auth/me', student)).statusCode, 200);
+  assert.equal(
+    (await request('DELETE', `/api/courses/${courseId}`, admin, { confirm: true })).statusCode,
+    404,
+  );
+  assert.equal(
+    (await request('DELETE', `/api/courses/${randomUUID()}`, admin, { confirm: true })).statusCode,
+    404,
+  );
 });

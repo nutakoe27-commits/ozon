@@ -537,6 +537,7 @@ export function CourseEditor() {
   const { id } = useParams();
   const { data, error, refresh } = useResource<Course>(`/api/courses/${id}`);
   const [editing, setEditing] = useState<Lesson>();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const notice = useNotice();
   const navigate = useNavigate();
@@ -600,6 +601,21 @@ export function CourseEditor() {
       notice((e as Error).message, true);
     }
   }
+  async function deleteCourse() {
+    setBusy(true);
+    try {
+      await api(`/api/courses/${id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ confirm: true }),
+      });
+      notice('Курс удалён');
+      navigate('/admin/courses', { replace: true });
+    } catch (e) {
+      notice((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function move(l: Lesson, direction: number) {
     const index = lessons.indexOf(l);
     const other = lessons[index + direction];
@@ -636,6 +652,10 @@ export function CourseEditor() {
         <button className="button primary" disabled={busy} onClick={() => void publish()}>
           <Send size={17} />
           {data.published ? 'Снять с публикации' : 'Опубликовать'}
+        </button>
+        <button className="button danger" disabled={busy} onClick={() => setDeleteOpen(true)}>
+          <Trash2 size={17} />
+          Удалить курс
         </button>
       </PageHeading>
       <div className="editor-layout">
@@ -817,6 +837,36 @@ export function CourseEditor() {
           onClose={() => setEditing(undefined)}
           onSave={refresh}
         />
+      )}
+      {deleteOpen && (
+        <Modal
+          title="Удаление курса"
+          onClose={() => {
+            if (!busy) setDeleteOpen(false);
+          }}
+        >
+          <div className="course-delete-warning">
+            <p>Вы собираетесь удалить курс «{data.title}».</p>
+            <p>
+              Будут безвозвратно удалены все его уроки, назначения, попытки, прогресс учеников,
+              баллы за уроки и выданные сертификаты, даже если обучение уже началось.
+            </p>
+            <p>Видео и изображения останутся в медиатеке. Отменить удаление курса нельзя.</p>
+          </div>
+          <div className="modal-actions">
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={() => setDeleteOpen(false)}
+            >
+              Отмена
+            </button>
+            <button className="button danger" disabled={busy} onClick={() => void deleteCourse()}>
+              <Trash2 size={17} />
+              {busy ? 'Удаляем…' : 'Да, удалить курс'}
+            </button>
+          </div>
+        </Modal>
       )}
     </>
   );

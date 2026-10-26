@@ -483,6 +483,17 @@ form > .button.full {
 .button.secondary:hover {
   background: #f4f7ec;
 }
+.button.danger {
+  background: #fff0eb;
+  border-color: #ebc3b8;
+  color: #9d4334;
+}
+.button.danger:hover {
+  background: #fce1d8;
+}
+.course-delete-warning p + p {
+  margin-top: 12px;
+}
 .button.small {
   min-height: 33px;
   padding: 7px 11px;
