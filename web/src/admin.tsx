@@ -171,6 +171,7 @@ function newLesson(type: Lesson['type'], position: number): Lesson {
           }
         : type === 'hotspot'
           ? {
+              questions: [],
               instruction: 'Переместите работника в безопасную пешеходную зону.',
               targets: [{ x: 4, y: 67, width: 28, height: 26 }],
               start: { x: 50, y: 85 },
@@ -193,6 +194,7 @@ function LessonEditor({
   const [draft, setDraft] = useState<Lesson>(() => {
     const copy = structuredClone(lesson);
     if (copy.type === 'hotspot') {
+      copy.activity.questions ??= [];
       copy.activity.targets ??= copy.activity.target ? [copy.activity.target] : [];
       copy.activity.start ??= { x: 50, y: 85 };
       delete copy.activity.target;
@@ -400,182 +402,6 @@ function LessonEditor({
               </label>
               <span>XP начисляются за отправку. Оценка знаний сохраняется отдельно.</span>
             </div>
-            {draft.activity.questions?.map((q, index) => (
-              <div className="question-editor" key={q.id}>
-                <div className="section-title">
-                  <h3>Вопрос {index + 1}</h3>
-                  {draft.activity.questions!.length > 1 && (
-                    <button
-                      type="button"
-                      className="icon-button danger-text"
-                      aria-label={`Удалить вопрос ${index + 1}`}
-                      onClick={() =>
-                        activity(
-                          'questions',
-                          draft.activity.questions!.filter((_, i) => i !== index),
-                        )
-                      }
-                    >
-                      <Trash2 size={17} />
-                    </button>
-                  )}
-                </div>
-                <label>
-                  Текст вопроса
-                  <textarea
-                    required
-                    minLength={3}
-                    maxLength={2000}
-                    rows={2}
-                    value={q.prompt}
-                    onChange={(e) => question(index, { prompt: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Тип ответа
-                  <select
-                    aria-label={`Тип ответа вопроса ${index + 1}`}
-                    value={q.multiple ? 'multiple' : 'single'}
-                    onChange={(e) =>
-                      question(
-                        index,
-                        e.target.value === 'multiple'
-                          ? {
-                              multiple: true,
-                              correctIndexes: q.correctIndexes ?? [q.correctIndex ?? 0],
-                              correctIndex: undefined,
-                            }
-                          : {
-                              multiple: false,
-                              correctIndex: q.correctIndexes?.[0] ?? q.correctIndex ?? 0,
-                              correctIndexes: undefined,
-                            },
-                      )
-                    }
-                  >
-                    <option value="single">Один правильный ответ</option>
-                    <option value="multiple">Несколько правильных ответов</option>
-                  </select>
-                </label>
-                <small className="muted-text">
-                  {q.multiple
-                    ? 'Каждая верная галочка даёт долю балла, каждая неверная вычитает такую же долю. Одна верная из четырёх даёт 25%.'
-                    : 'Отметьте правильный вариант кружком слева.'}
-                </small>
-                {q.options.map((option, optionIndex) => (
-                  <div className="option-editor" key={optionIndex}>
-                    <input
-                      type={q.multiple ? 'checkbox' : 'radio'}
-                      aria-label={`Правильный ответ ${optionIndex + 1} на вопрос ${index + 1}`}
-                      name={`correct-${q.id}`}
-                      checked={
-                        q.multiple
-                          ? (q.correctIndexes || []).includes(optionIndex)
-                          : q.correctIndex === optionIndex
-                      }
-                      onChange={(e) =>
-                        question(
-                          index,
-                          q.multiple
-                            ? {
-                                correctIndexes: e.target.checked
-                                  ? [...(q.correctIndexes || []), optionIndex]
-                                  : (q.correctIndexes || []).filter(
-                                      (value) => value !== optionIndex,
-                                    ),
-                              }
-                            : { correctIndex: optionIndex },
-                        )
-                      }
-                    />
-                    <input
-                      required
-                      maxLength={500}
-                      aria-label={`Вариант ${optionIndex + 1} вопроса ${index + 1}`}
-                      value={option}
-                      placeholder={`Вариант ответа ${optionIndex + 1}`}
-                      onChange={(e) =>
-                        question(index, {
-                          options: q.options.map((o, i) =>
-                            i === optionIndex ? e.target.value : o,
-                          ),
-                        })
-                      }
-                    />
-                    {q.options.length > 2 && (
-                      <button
-                        type="button"
-                        className="icon-button"
-                        aria-label="Удалить вариант"
-                        onClick={() =>
-                          question(index, {
-                            options: q.options.filter((_, i) => i !== optionIndex),
-                            correctIndex:
-                              q.correctIndex === optionIndex
-                                ? 0
-                                : (q.correctIndex || 0) > optionIndex
-                                  ? (q.correctIndex || 0) - 1
-                                  : q.correctIndex,
-                            ...(q.multiple
-                              ? {
-                                  correctIndex: undefined,
-                                  correctIndexes: (q.correctIndexes || [])
-                                    .filter((value) => value !== optionIndex)
-                                    .map((value) => (value > optionIndex ? value - 1 : value)),
-                                }
-                              : {}),
-                          })
-                        }
-                      >
-                        <X size={15} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {q.options.length < 8 && (
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => question(index, { options: [...q.options, ''] })}
-                  >
-                    <Plus size={15} />
-                    Добавить вариант
-                  </button>
-                )}
-                <label>
-                  Пояснение для администратора
-                  <textarea
-                    rows={2}
-                    maxLength={2000}
-                    value={q.explanation || ''}
-                    onChange={(e) => question(index, { explanation: e.target.value })}
-                    placeholder="Почему этот ответ правильный?"
-                  />
-                </label>
-              </div>
-            ))}
-            {(draft.activity.questions?.length || 0) < 50 && (
-              <button
-                type="button"
-                className="button secondary"
-                onClick={() =>
-                  activity('questions', [
-                    ...(draft.activity.questions || []),
-                    {
-                      id: crypto.randomUUID(),
-                      prompt: '',
-                      options: ['', ''],
-                      multiple: false,
-                      correctIndex: 0,
-                      explanation: '',
-                    },
-                  ])
-                }
-              >
-                <Plus size={17} />
-                Добавить вопрос
-              </button>
-            )}
           </>
         )}
         {draft.type === 'hotspot' && (
@@ -771,6 +597,195 @@ function LessonEditor({
               />
             </label>
           </>
+        )}
+        {(draft.type === 'quiz' || draft.type === 'hotspot') && (
+          <section className="lesson-question-editor">
+            {draft.type === 'hotspot' && (
+              <div className="visual-question-heading">
+                <h3>Тестовые вопросы (необязательно)</h3>
+                <p>
+                  Вопросы появятся под сценой. Работник и все ответы отправляются вместе, один раз.
+                  Оценка урока — среднее за положение работника и каждый вопрос.
+                </p>
+              </div>
+            )}
+            {draft.activity.questions?.map((q, index) => (
+              <div className="question-editor" key={q.id}>
+                <div className="section-title">
+                  <h3>Вопрос {index + 1}</h3>
+                  {draft.activity.questions!.length > (draft.type === 'hotspot' ? 0 : 1) && (
+                    <button
+                      type="button"
+                      className="icon-button danger-text"
+                      aria-label={`Удалить вопрос ${index + 1}`}
+                      onClick={() =>
+                        activity(
+                          'questions',
+                          draft.activity.questions!.filter((_, i) => i !== index),
+                        )
+                      }
+                    >
+                      <Trash2 size={17} />
+                    </button>
+                  )}
+                </div>
+                <label>
+                  Текст вопроса
+                  <textarea
+                    required
+                    minLength={3}
+                    maxLength={2000}
+                    rows={2}
+                    value={q.prompt}
+                    onChange={(e) => question(index, { prompt: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Тип ответа
+                  <select
+                    aria-label={`Тип ответа вопроса ${index + 1}`}
+                    value={q.multiple ? 'multiple' : 'single'}
+                    onChange={(e) =>
+                      question(
+                        index,
+                        e.target.value === 'multiple'
+                          ? {
+                              multiple: true,
+                              correctIndexes: q.correctIndexes ?? [q.correctIndex ?? 0],
+                              correctIndex: undefined,
+                            }
+                          : {
+                              multiple: false,
+                              correctIndex: q.correctIndexes?.[0] ?? q.correctIndex ?? 0,
+                              correctIndexes: undefined,
+                            },
+                      )
+                    }
+                  >
+                    <option value="single">Один правильный ответ</option>
+                    <option value="multiple">Несколько правильных ответов</option>
+                  </select>
+                </label>
+                <small className="muted-text">
+                  {q.multiple
+                    ? 'Каждая верная галочка даёт долю балла, каждая неверная вычитает такую же долю. Одна верная из четырёх даёт 25%.'
+                    : 'Отметьте правильный вариант кружком слева.'}
+                </small>
+                {q.options.map((option, optionIndex) => (
+                  <div className="option-editor" key={optionIndex}>
+                    <input
+                      type={q.multiple ? 'checkbox' : 'radio'}
+                      aria-label={`Правильный ответ ${optionIndex + 1} на вопрос ${index + 1}`}
+                      name={`correct-${q.id}`}
+                      checked={
+                        q.multiple
+                          ? (q.correctIndexes || []).includes(optionIndex)
+                          : q.correctIndex === optionIndex
+                      }
+                      onChange={(e) =>
+                        question(
+                          index,
+                          q.multiple
+                            ? {
+                                correctIndexes: e.target.checked
+                                  ? [...(q.correctIndexes || []), optionIndex]
+                                  : (q.correctIndexes || []).filter(
+                                      (value) => value !== optionIndex,
+                                    ),
+                              }
+                            : { correctIndex: optionIndex },
+                        )
+                      }
+                    />
+                    <input
+                      required
+                      maxLength={500}
+                      aria-label={`Вариант ${optionIndex + 1} вопроса ${index + 1}`}
+                      value={option}
+                      placeholder={`Вариант ответа ${optionIndex + 1}`}
+                      onChange={(e) =>
+                        question(index, {
+                          options: q.options.map((o, i) =>
+                            i === optionIndex ? e.target.value : o,
+                          ),
+                        })
+                      }
+                    />
+                    {q.options.length > 2 && (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label="Удалить вариант"
+                        onClick={() =>
+                          question(index, {
+                            options: q.options.filter((_, i) => i !== optionIndex),
+                            correctIndex:
+                              q.correctIndex === optionIndex
+                                ? 0
+                                : (q.correctIndex || 0) > optionIndex
+                                  ? (q.correctIndex || 0) - 1
+                                  : q.correctIndex,
+                            ...(q.multiple
+                              ? {
+                                  correctIndex: undefined,
+                                  correctIndexes: (q.correctIndexes || [])
+                                    .filter((value) => value !== optionIndex)
+                                    .map((value) => (value > optionIndex ? value - 1 : value)),
+                                }
+                              : {}),
+                          })
+                        }
+                      >
+                        <X size={15} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {q.options.length < 8 && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => question(index, { options: [...q.options, ''] })}
+                  >
+                    <Plus size={15} />
+                    Добавить вариант
+                  </button>
+                )}
+                <label>
+                  Пояснение для администратора
+                  <textarea
+                    rows={2}
+                    maxLength={2000}
+                    value={q.explanation || ''}
+                    onChange={(e) => question(index, { explanation: e.target.value })}
+                    placeholder="Почему этот ответ правильный?"
+                  />
+                </label>
+              </div>
+            ))}
+            {(draft.activity.questions?.length || 0) < 50 && (
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() =>
+                  activity('questions', [
+                    ...(draft.activity.questions || []),
+                    {
+                      id: crypto.randomUUID(),
+                      prompt: '',
+                      options: ['', ''],
+                      multiple: false,
+                      correctIndex: 0,
+                      explanation: '',
+                    },
+                  ])
+                }
+              >
+                <Plus size={17} />
+                Добавить вопрос
+              </button>
+            )}
+          </section>
         )}
         <div className="modal-actions">
           <button className="button secondary" type="button" onClick={onClose}>

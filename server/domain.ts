@@ -3,60 +3,61 @@ import { z } from 'zod';
 import { HttpError, type User } from './auth.js';
 import { sql, transaction } from './db.js';
 const coordinate = z.number().min(0).max(100);
-export const quizSchema = z
+const questionSchema = z
   .object({
-    passPercent: z.number().int().min(1).max(100).default(80),
-    questions: z
-      .array(
-        z.object({
-          id: z.string().min(1).max(80),
-          prompt: z.string().trim().min(3).max(2000),
-          options: z.array(z.string().trim().min(1).max(500)).min(2).max(8),
-          multiple: z.boolean().default(false),
-          correctIndex: z.number().int().min(0).max(7).optional(),
-          correctIndexes: z
-            .array(z.number().int().min(0).max(7))
-            .min(1, 'Отметьте хотя бы один правильный ответ')
-            .max(8)
-            .refine((indexes) => new Set(indexes).size === indexes.length, {
-              message: 'Правильные ответы не должны повторяться',
-            })
-            .optional(),
-          explanation: z.string().max(2000).default(''),
-        }),
-      )
-      .min(1)
-      .max(50),
+    id: z.string().min(1).max(80),
+    prompt: z.string().trim().min(3).max(2000),
+    options: z.array(z.string().trim().min(1).max(500)).min(2).max(8),
+    multiple: z.boolean().default(false),
+    correctIndex: z.number().int().min(0).max(7).optional(),
+    correctIndexes: z
+      .array(z.number().int().min(0).max(7))
+      .min(1, 'Отметьте хотя бы один правильный ответ')
+      .max(8)
+      .refine((indexes) => new Set(indexes).size === indexes.length, {
+        message: 'Правильные ответы не должны повторяться',
+      })
+      .optional(),
+    explanation: z.string().max(2000).default(''),
   })
-  .superRefine((quiz, ctx) => {
+  .superRefine((q, ctx) => {
+    const correct = q.multiple
+      ? q.correctIndexes
+      : q.correctIndex === undefined
+        ? undefined
+        : [q.correctIndex];
+    if (!correct?.length)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Отметьте хотя бы один правильный ответ',
+        path: [q.multiple ? 'correctIndexes' : 'correctIndex'],
+      });
+    if (correct?.some((index) => index >= q.options.length))
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Выберите существующий ответ',
+        path: [q.multiple ? 'correctIndexes' : 'correctIndex'],
+      });
+  });
+const questionsSchema = z
+  .array(questionSchema)
+  .max(50)
+  .superRefine((questions, ctx) => {
     const ids = new Set<string>();
-    quiz.questions.forEach((q, i) => {
-      const correct = q.multiple
-        ? q.correctIndexes
-        : q.correctIndex === undefined
-          ? undefined
-          : [q.correctIndex];
-      if (!correct?.length)
-        ctx.addIssue({
-          code: 'custom',
-          message: 'Отметьте хотя бы один правильный ответ',
-          path: ['questions', i, q.multiple ? 'correctIndexes' : 'correctIndex'],
-        });
-      if (correct?.some((index) => index >= q.options.length))
-        ctx.addIssue({
-          code: 'custom',
-          message: 'Выберите существующий ответ',
-          path: ['questions', i, q.multiple ? 'correctIndexes' : 'correctIndex'],
-        });
+    questions.forEach((q, i) => {
       if (ids.has(q.id))
         ctx.addIssue({
           code: 'custom',
           message: 'Повторяющийся идентификатор вопроса',
-          path: ['questions', i, 'id'],
+          path: [i, 'id'],
         });
       ids.add(q.id);
     });
   });
+export const quizSchema = z.object({
+  passPercent: z.number().int().min(1).max(100).default(80),
+  questions: questionsSchema.min(1),
+});
 const pointSchema = z.object({ x: coordinate, y: coordinate });
 const zoneSchema = z
   .object({
@@ -77,6 +78,7 @@ export const hotspotSchema = z
     target: zoneSchema.optional(),
     start: pointSchema.default({ x: 50, y: 85 }),
     explanation: z.string().max(2000).default(''),
+    questions: questionsSchema.default([]),
   })
   .refine((a) => !!a.targets?.length || !!a.target, {
     message: 'Добавьте хотя бы одну безопасную зону',
@@ -85,71 +87,101 @@ export const hotspotSchema = z
     ...activity,
     targets: targets ?? [target!],
   }));
+const answerIndexSchema = z.number().int().min(0).max(7);
+const answersSchema = z.record(
+  z.string(),
+  z.union([
+    answerIndexSchema,
+    z
+      .array(answerIndexSchema)
+      .max(8)
+      .refine((values) => new Set(values).size === values.length, {
+        message: 'Варианты ответа не должны повторяться',
+      }),
+  ]),
+);
+export const hotspotResponseSchema = pointSchema.extend({ answers: answersSchema.default({}) });
+export function validateQuestionAnswers(
+  questions: z.infer<typeof questionsSchema>,
+  response: unknown,
+) {
+  const answers = answersSchema.parse(response);
+  for (const question of questions) {
+    const answer = answers[question.id];
+    if (question.multiple ? !Array.isArray(answer) || !answer.length : typeof answer !== 'number')
+      throw new HttpError(400, 'Ответьте на все вопросы задания');
+    const selected = Array.isArray(answer) ? answer : [answer];
+    if (selected.some((index) => index >= question.options.length))
+      throw new HttpError(400, 'Выберите существующие варианты ответа');
+  }
+}
+const visibleQuestions = (questions: Record<string, any>[] = []) =>
+  questions.map(({ correctIndex, correctIndexes, explanation, ...q }) => ({
+    ...q,
+    multiple: q.multiple ?? false,
+  }));
 export function safeLesson(lesson: Record<string, any>, admin: boolean, revealResults = false) {
   if (admin) return lesson;
   const activity =
     lesson.type === 'quiz'
       ? {
           passPercent: lesson.activity.passPercent,
-          questions: (lesson.activity.questions || []).map(
-            ({ correctIndex, correctIndexes, explanation, ...q }: Record<string, any>) => ({
-              ...q,
-              multiple: q.multiple ?? false,
-            }),
-          ),
+          questions: visibleQuestions(lesson.activity.questions),
         }
       : lesson.type === 'hotspot'
         ? {
             instruction: lesson.activity.instruction,
             start: lesson.activity.start ?? { x: 50, y: 85 },
+            questions: visibleQuestions(lesson.activity.questions),
           }
         : {};
   const { video_error, score, passed, attempt_id, ...visible } = lesson;
   return { ...visible, activity, ...(revealResults ? { score, passed } : {}) };
 }
+function questionScores(questions: z.infer<typeof questionsSchema>, response: unknown) {
+  const answers = answersSchema.parse(response);
+  return questions.map((q) => {
+    const given = answers[q.id];
+    let score = 0;
+    if (q.multiple && Array.isArray(given)) {
+      const correct = q.correctIndexes!;
+      const hits = given.filter((value) => correct.includes(value)).length;
+      const wrong = given.length - hits;
+      score = Math.max(0, Math.min(100, ((hits - wrong) / correct.length) * 100));
+    } else if (!q.multiple && typeof given === 'number' && given === q.correctIndex) score = 100;
+    return {
+      id: q.id,
+      prompt: q.prompt,
+      score: Math.round(score * 100) / 100,
+    };
+  });
+}
+const averageScore = (details: { score: number }[]) =>
+  Math.round((details.reduce((sum, item) => sum + item.score, 0) / details.length) * 100) / 100;
 export function evaluate(type: string, activity: any, response: unknown) {
   if (type === 'quiz') {
     const quiz = quizSchema.parse(activity);
-    const index = z.number().int().min(0).max(7);
-    const selection = z
-      .array(index)
-      .max(8)
-      .refine((values) => new Set(values).size === values.length, {
-        message: 'Варианты ответа не должны повторяться',
-      });
-    const answers = z.record(z.string(), z.union([index, selection])).parse(response);
-    const details = quiz.questions.map((q) => {
-      const given = answers[q.id];
-      let score = 0;
-      if (q.multiple && Array.isArray(given)) {
-        const correct = q.correctIndexes!;
-        const hits = given.filter((value) => correct.includes(value)).length;
-        const wrong = given.length - hits;
-        score = Math.max(0, Math.min(100, ((hits - wrong) / correct.length) * 100));
-      } else if (!q.multiple && typeof given === 'number' && given === q.correctIndex) score = 100;
-      return {
-        id: q.id,
-        prompt: q.prompt,
-        score: Math.round(score * 100) / 100,
-      };
-    });
-    const score =
-      Math.round((details.reduce((sum, q) => sum + q.score, 0) / quiz.questions.length) * 100) /
-      100;
+    const details = questionScores(quiz.questions, response);
+    const score = averageScore(details);
     return { score, passed: score >= quiz.passPercent, details };
   }
   if (type === 'hotspot') {
     const a = hotspotSchema.parse(activity);
-    const point = pointSchema.parse(response);
+    const point = hotspotResponseSchema.parse(response);
     const matches = a.targets.filter(
       (t) =>
         point.x >= t.x && point.x <= t.x + t.width && point.y >= t.y && point.y <= t.y + t.height,
     );
-    const score = matches.reduce((best, zone) => Math.max(best, zone.score), 0);
+    const sceneScore = matches.reduce((best, zone) => Math.max(best, zone.score), 0);
+    const details = [
+      { id: 'scene', prompt: a.instruction, score: sceneScore },
+      ...questionScores(a.questions, point.answers).map((q) => ({ ...q, id: `question:${q.id}` })),
+    ];
+    const score = averageScore(details);
     return {
       score,
       passed: score === 100,
-      details: [{ id: 'scene', prompt: a.instruction, score }],
+      details,
     };
   }
   throw new HttpError(400, 'У этого урока нет задания');

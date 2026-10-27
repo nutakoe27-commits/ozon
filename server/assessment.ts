@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
 import { HttpError, type User } from './auth.js';
 import { pool, transaction } from './db.js';
-import { evaluate, issueCertificate, quizSchema } from './domain.js';
+import {
+  evaluate,
+  hotspotSchema,
+  hotspotResponseSchema,
+  issueCertificate,
+  quizSchema,
+  validateQuestionAnswers,
+} from './domain.js';
 import type { PoolClient } from 'pg';
 
 export async function assessmentState(userId: string, courseId: string, db?: PoolClient) {
@@ -61,16 +67,12 @@ export async function submitAssessment(user: User, lesson: any, response: unknow
     if (previous.submitted_at)
       throw new HttpError(409, 'Ответ уже сохранён. Повторная попытка недоступна.');
     if (current.type === 'quiz') {
-      const questions = quizSchema.parse(current.activity).questions;
-      const input = z.record(z.string(), z.unknown()).parse(response);
-      for (const question of questions) {
-        const answer = input[question.id];
-        const selected = question.multiple
-          ? z.array(z.number().int()).min(1).parse(answer)
-          : [z.number().int().parse(answer)];
-        if (selected.some((index) => index < 0 || index >= question.options.length))
-          throw new HttpError(400, 'Выберите существующие варианты ответа');
-      }
+      validateQuestionAnswers(quizSchema.parse(current.activity).questions, response);
+    } else {
+      validateQuestionAnswers(
+        hotspotSchema.parse(current.activity).questions,
+        hotspotResponseSchema.parse(response).answers,
+      );
     }
     const result = evaluate(current.type, current.activity, response);
     const attemptId = randomUUID();

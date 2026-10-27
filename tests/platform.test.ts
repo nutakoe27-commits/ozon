@@ -652,7 +652,11 @@ test('multiple zones accept any safe target, preserve legacy lessons and conceal
   assert.equal(evaluate('hotspot', hotspot, { x: 20, y: 30 }).passed, true);
   assert.deepEqual(hotspotSchema.parse(hotspot).start, { x: 50, y: 85 });
   const visible = safeLesson({ type: 'hotspot', activity: config }, false);
-  assert.deepEqual(visible.activity, { instruction: config.instruction, start: config.start });
+  assert.deepEqual(visible.activity, {
+    instruction: config.instruction,
+    start: config.start,
+    questions: [],
+  });
   for (const invalid of [
     { ...config, targets: [] },
     { ...config, targets: [{ x: 95, y: 10, width: 20, height: 20 }] },
@@ -1203,6 +1207,196 @@ test('concurrent submissions cannot overwrite the first grade and incomplete for
       ])
     )[0].score,
     before,
+  );
+});
+test('visual questions share validation, hide answer keys and grade each component equally', () => {
+  const activity = {
+    ...hotspot,
+    questions: [
+      { ...quiz.questions[0], id: 'scene' },
+      {
+        id: 'checks',
+        prompt: 'Выберите безопасные действия',
+        multiple: true,
+        options: ['Первое', 'Второе', 'Третье', 'Четвёртое', 'Опасное'],
+        correctIndexes: [0, 1, 2, 3],
+        explanation: 'Скрытое пояснение',
+      },
+    ],
+  };
+  assert.equal(hotspotSchema.parse(hotspot).questions.length, 0);
+  const parsed = hotspotSchema.parse(activity);
+  assert.equal(parsed.questions.length, 2);
+  const visible = safeLesson({ type: 'hotspot', activity: parsed }, false).activity;
+  assert.equal(visible.questions.length, 2);
+  assert.equal(visible.questions[1].multiple, true);
+  for (const q of visible.questions) {
+    assert.equal(q.correctIndex, undefined);
+    assert.equal(q.correctIndexes, undefined);
+    assert.equal(q.explanation, undefined);
+  }
+  assert.equal(visible.targets, undefined);
+  assert.equal(visible.explanation, undefined);
+  for (const questions of [
+    [{ ...activity.questions[0], correctIndex: 3 }],
+    [{ ...activity.questions[1], correctIndexes: [] }],
+    [activity.questions[0], activity.questions[0]],
+    Array.from({ length: 51 }, (_, i) => ({ ...activity.questions[0], id: String(i) })),
+  ])
+    assert.equal(hotspotSchema.safeParse({ ...activity, questions }).success, false);
+  const graded = evaluate('hotspot', activity, {
+    x: 20,
+    y: 30,
+    answers: { scene: 1, checks: [0] },
+  });
+  assert.equal(graded.score, 75);
+  assert.deepEqual(
+    graded.details.map((d) => d.score),
+    [100, 100, 25],
+  );
+  assert.deepEqual(
+    graded.details.map((d) => d.id),
+    ['scene', 'question:scene', 'question:checks'],
+  );
+  assert.equal(graded.passed, false);
+  assert.equal(
+    evaluate('hotspot', activity, { x: 20, y: 30, answers: { scene: 1, checks: [0, 4] } }).score,
+    66.67,
+  );
+  assert.equal(
+    evaluate('hotspot', activity, { x: 20, y: 30, answers: { scene: 1, checks: [0, 1, 2, 3] } })
+      .passed,
+    true,
+  );
+});
+test('visual questions submit atomically once, preserve privacy and appear in individual reports', async () => {
+  const course = (
+    await request('POST', '/api/courses', admin, { title: 'Сцена и тест в одном уроке' })
+  ).json();
+  const activity = {
+    instruction: 'Выберите место для работника',
+    targets: [
+      { x: 10, y: 10, width: 20, height: 20, score: 50 },
+      { x: 60, y: 60, width: 20, height: 20, score: 100 },
+    ],
+    questions: [
+      { ...quiz.questions[0] },
+      {
+        id: 'checks',
+        prompt: 'Выберите безопасные действия',
+        multiple: true,
+        options: ['Первое', 'Второе', 'Третье', 'Четвёртое', 'Неверное'],
+        correctIndexes: [0, 1, 2, 3],
+      },
+    ],
+  };
+  const invalid = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+    title: 'Некорректные вопросы сцены',
+    type: 'hotspot',
+    activity: { ...activity, questions: [{ ...activity.questions[1], correctIndexes: [6] }] },
+  });
+  assert.equal(invalid.statusCode, 400);
+  const created = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+    title: 'Визуальная проверка с вопросами',
+    type: 'hotspot',
+    activity,
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const scene = created.json();
+  assert.equal(scene.activity.questions.length, 2);
+  const last = (
+    await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+      title: 'Завершающий урок',
+      type: 'quiz',
+      position: 1,
+      activity: quiz,
+    })
+  ).json();
+  assert.equal(
+    (await request('PATCH', `/api/courses/${course.id}`, admin, { published: true })).statusCode,
+    200,
+  );
+  await request('POST', `/api/courses/${course.id}/enrollments`, admin, {
+    userIds: [studentId, outsiderId],
+  });
+  const before = (await request('GET', '/api/dashboard', student)).json().xp;
+  const view = (await request('GET', `/api/courses/${course.id}`, student)).json().lessons[0];
+  assert.equal(view.activity.questions.length, 2);
+  assert.equal(view.activity.questions[0].correctIndex, undefined);
+  assert.equal(view.activity.questions[1].correctIndexes, undefined);
+  for (const response of [
+    { x: 15, y: 15 },
+    { x: 15, y: 15, answers: { q1: 1 } },
+    { x: 15, y: 15, answers: { q1: 1, checks: [] } },
+    { x: 15, y: 15, answers: { q1: [1], checks: [0] } },
+    { x: 15, y: 15, answers: { q1: 1, checks: [0, 0] } },
+    { x: 15, y: 15, answers: { q1: 1, checks: [7] } },
+    { answers: { q1: 1, checks: [0] } },
+  ])
+    assert.equal(
+      (await request('POST', `/api/lessons/${scene.id}/attempt`, student, { response })).statusCode,
+      400,
+    );
+  assert.equal((await sql('SELECT * FROM attempts WHERE lesson_id=$1', [scene.id])).length, 0);
+  assert.equal((await sql('SELECT * FROM progress WHERE lesson_id=$1', [scene.id])).length, 0);
+  const response = { x: 15, y: 15, answers: { q1: 1, checks: [0] } };
+  const saved = await request('POST', `/api/lessons/${scene.id}/attempt`, student, { response });
+  assert.deepEqual(saved.json(), { submitted: true, resultsAvailable: false });
+  assert.equal((await request('GET', '/api/dashboard', student)).json().xp, before + 75);
+  const pending = (await request('GET', `/api/courses/${course.id}`, student)).json();
+  assert.equal(pending.lessons[0].score, undefined);
+  assert.equal(pending.lessons[0].passed, undefined);
+  assert.equal(
+    (await request('GET', `/api/courses/${course.id}/results`, student)).statusCode,
+    409,
+  );
+  const retry = await request('POST', `/api/lessons/${scene.id}/attempt`, student, {
+    response: { x: 70, y: 70, answers: { q1: 1, checks: [0, 1, 2, 3] } },
+  });
+  assert.equal(retry.statusCode, 409);
+  const report = (await request('GET', `/api/reports/${studentId}/${course.id}`, admin)).json();
+  assert.equal(report.lessons[0].score, 58.33);
+  assert.deepEqual(
+    report.lessons[0].details.map((d: any) => d.score),
+    [50, 100, 25],
+  );
+  assert.equal(
+    (await request('GET', `/api/reports/${studentId}/${course.id}`, student)).statusCode,
+    403,
+  );
+  const [attempt] = await sql('SELECT * FROM attempts WHERE lesson_id=$1 AND user_id=$2', [
+    scene.id,
+    studentId,
+  ]);
+  assert.deepEqual(attempt.response, response);
+  await request('POST', `/api/lessons/${last.id}/attempt`, student, { response: { q1: 1 } });
+  const final = (await request('GET', `/api/courses/${course.id}/results`, student)).json();
+  assert.equal(final.score, 79.17);
+  assert.equal(final.lessons[0].score, 58.33);
+  assert.equal(final.lessons[0].details, undefined);
+  assert.equal(final.certificateId, null);
+  await request('POST', `/api/lessons/${scene.id}/attempt`, outsider, {
+    response: { x: 70, y: 70, answers: { q1: 1, checks: [0, 1, 2, 3] } },
+  });
+  await request('POST', `/api/lessons/${last.id}/attempt`, outsider, { response: { q1: 1 } });
+  const perfect = (await request('GET', `/api/courses/${course.id}/results`, outsider)).json();
+  assert.equal(perfect.score, 100);
+  assert.ok(perfect.certificateId);
+  const edited = await request('PATCH', `/api/lessons/${scene.id}`, admin, {
+    activity: { ...activity, questions: [] },
+  });
+  assert.equal(edited.statusCode, 200, edited.body);
+  assert.deepEqual(edited.json().activity.questions, []);
+  const historical = (await request('GET', `/api/reports/${studentId}/${course.id}`, admin)).json();
+  assert.equal(historical.lessons[0].score, 58.33);
+  assert.equal(historical.lessons[0].details.length, 3);
+  assert.equal(
+    (
+      await request('POST', `/api/lessons/${scene.id}/attempt`, student, {
+        response: { x: 70, y: 70 },
+      })
+    ).statusCode,
+    409,
   );
 });
 test('assessment migration preserves old grades and attempts, adopts failed-only results and is repeatable', async () => {

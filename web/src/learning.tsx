@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -12,7 +12,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { post, useResource } from './api';
-import type { Course, Lesson } from './types';
+import type { Course, Lesson, Question } from './types';
 import { Empty, ErrorMessage, Loading, useNotice } from './ui';
 import { VideoPlayer } from './VideoPlayer';
 import { HotspotScene } from './Hotspot';
@@ -30,48 +30,25 @@ function SubmittedNotice() {
     </div>
   );
 }
-function Quiz({
-  lesson,
-  onSubmitted,
-  onConflict,
+type Answers = Record<string, number | number[]>;
+const allQuestionsAnswered = (questions: Question[], answers: Answers) =>
+  questions.every((q) => {
+    const answer = answers[q.id];
+    return q.multiple ? Array.isArray(answer) && answer.length > 0 : typeof answer === 'number';
+  });
+function QuestionAnswers({
+  questions,
+  answers,
+  setAnswers,
+  busy,
 }: {
-  lesson: Lesson;
-  onSubmitted: (available: boolean) => void;
-  onConflict: () => void;
+  questions: Question[];
+  answers: Answers;
+  setAnswers: Dispatch<SetStateAction<Answers>>;
+  busy: boolean;
 }) {
-  const [answers, setAnswers] = useState<Record<string, number | number[]>>({});
-  const [busy, setBusy] = useState(false);
-  const notice = useNotice();
-  const questions = lesson.activity.questions || [];
-  async function submit() {
-    setBusy(true);
-    try {
-      const result = await post(`/api/lessons/${lesson.id}/attempt`, { response: answers });
-      onSubmitted(result.resultsAvailable);
-    } catch (error) {
-      if ((error as any).status === 409) onConflict();
-      else notice((error as Error).message, true);
-    } finally {
-      setBusy(false);
-    }
-  }
-  if (lesson.submitted_at) return <SubmittedNotice />;
   return (
-    <div className="exercise">
-      <div className="exercise-heading">
-        <span className="exercise-icon">
-          <ListChecks size={25} />
-        </span>
-        <div>
-          <span className="eyebrow">ПРОВЕРКА ЗНАНИЙ</span>
-          <h2>Ответьте на все вопросы</h2>
-          <p>Одна попытка. После отправки изменить ответы нельзя.</p>
-        </div>
-        <span className="xp-tag">
-          <Sparkles size={14} />
-          50 XP
-        </span>
-      </div>
+    <>
       {questions.map((q, i) => (
         <fieldset className="quiz-question" key={q.id}>
           <legend>
@@ -120,18 +97,60 @@ function Quiz({
           })}
         </fieldset>
       ))}
+    </>
+  );
+}
+function Quiz({
+  lesson,
+  onSubmitted,
+  onConflict,
+}: {
+  lesson: Lesson;
+  onSubmitted: (available: boolean) => void;
+  onConflict: () => void;
+}) {
+  const [answers, setAnswers] = useState<Answers>({});
+  const [busy, setBusy] = useState(false);
+  const notice = useNotice();
+  const questions = lesson.activity.questions || [];
+  async function submit() {
+    setBusy(true);
+    try {
+      const result = await post(`/api/lessons/${lesson.id}/attempt`, { response: answers });
+      onSubmitted(result.resultsAvailable);
+    } catch (error) {
+      if ((error as any).status === 409) onConflict();
+      else notice((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (lesson.submitted_at) return <SubmittedNotice />;
+  return (
+    <div className="exercise">
+      <div className="exercise-heading">
+        <span className="exercise-icon">
+          <ListChecks size={25} />
+        </span>
+        <div>
+          <span className="eyebrow">ПРОВЕРКА ЗНАНИЙ</span>
+          <h2>Ответьте на все вопросы</h2>
+          <p>Одна попытка. После отправки изменить ответы нельзя.</p>
+        </div>
+        <span className="xp-tag">
+          <Sparkles size={14} />
+          50 XP
+        </span>
+      </div>
+      <QuestionAnswers
+        questions={questions}
+        answers={answers}
+        setAnswers={setAnswers}
+        busy={busy}
+      />
       <button
         className="button primary"
-        disabled={
-          busy ||
-          questions.length === 0 ||
-          questions.some((q) => {
-            const answer = answers[q.id];
-            return q.multiple
-              ? !Array.isArray(answer) || answer.length === 0
-              : typeof answer !== 'number';
-          })
-        }
+        disabled={busy || questions.length === 0 || !allQuestionsAnswered(questions, answers)}
         onClick={() => void submit()}
       >
         {busy ? 'Сохраняем…' : 'Отправить ответы'}
@@ -150,12 +169,16 @@ function HotspotExercise({
   onConflict: () => void;
 }) {
   const [point, setPoint] = useState(() => lesson.activity.start ?? { x: 50, y: 85 });
+  const [answers, setAnswers] = useState<Answers>({});
+  const questions = lesson.activity.questions || [];
   const [busy, setBusy] = useState(false);
   const notice = useNotice();
   async function submit() {
     setBusy(true);
     try {
-      const result = await post(`/api/lessons/${lesson.id}/attempt`, { response: point });
+      const result = await post(`/api/lessons/${lesson.id}/attempt`, {
+        response: questions.length ? { ...point, answers } : point,
+      });
       onSubmitted(result.resultsAvailable);
     } catch (error) {
       if ((error as any).status === 409) onConflict();
@@ -192,8 +215,30 @@ function HotspotExercise({
           onPoint={setPoint}
         />
       </div>
-      <button className="button primary" disabled={busy} onClick={() => void submit()}>
-        {busy ? 'Сохраняем…' : 'Отправить решение'}
+      {!!questions.length && (
+        <section className="visual-question-section">
+          <h3>Ответьте на вопросы</h3>
+          <p className="question-hint">
+            Отправьте положение работника и все ответы вместе. После отправки изменить их нельзя.
+          </p>
+          <QuestionAnswers
+            questions={questions}
+            answers={answers}
+            setAnswers={setAnswers}
+            busy={busy}
+          />
+        </section>
+      )}
+      <button
+        className="button primary"
+        disabled={busy || !allQuestionsAnswered(questions, answers)}
+        onClick={() => void submit()}
+      >
+        {busy
+          ? 'Сохраняем…'
+          : questions.length
+            ? 'Отправить решение и ответы'
+            : 'Отправить решение'}
         <ArrowRight size={18} />
       </button>
     </div>

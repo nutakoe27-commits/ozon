@@ -635,3 +635,157 @@ test('checkbox assessment records partial percentages once and shows administrat
     await adminApi(page, `/api/courses/${course.id}`, { confirm: true }, 'DELETE');
   }
 });
+
+test('visual constructor combines the scene with optional mixed questions and one final submission', async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  await login(page);
+  const course = await adminApi(page, '/api/courses', {
+    title: `Визуальное задание с вопросами ${stamp}`,
+  });
+  let learner: Page | undefined;
+  try {
+    await page.goto(`/admin/courses/${course.id}`);
+    await page
+      .getByRole('button', {
+        name: 'Визуальное задание Сцена, персонаж и безопасная зона',
+        exact: true,
+      })
+      .click();
+    const dialog = page.getByRole('dialog', { name: 'Новый урок' });
+    await dialog.getByLabel('Название урока', { exact: true }).fill('Сцена с проверкой знаний');
+    await dialog
+      .getByRole('textbox', { name: /^Задание ученику/ })
+      .fill('Выберите место и ответьте на вопросы.');
+    await dialog
+      .getByRole('combobox', { name: 'Цвет и оценка зоны', exact: true })
+      .selectOption('50');
+    await dialog.getByRole('button', { name: 'Добавить вопрос', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Удалить вопрос 1', exact: true }).click();
+    await expect(dialog.locator('.question-editor')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Добавить вопрос', exact: true }).click();
+    await dialog.getByLabel('Текст вопроса', { exact: true }).fill('Кому сообщить об опасности?');
+    await dialog
+      .getByRole('textbox', { name: 'Вариант 1 вопроса 1', exact: true })
+      .fill('Руководителю');
+    await dialog.getByRole('textbox', { name: 'Вариант 2 вопроса 1', exact: true }).fill('Никому');
+    await dialog.getByRole('button', { name: 'Добавить вопрос', exact: true }).click();
+    await dialog
+      .locator('.question-editor')
+      .nth(1)
+      .getByLabel('Текст вопроса', { exact: true })
+      .fill('Какие меры нужны перед работой?');
+    await dialog
+      .getByRole('combobox', { name: 'Тип ответа вопроса 2', exact: true })
+      .selectOption('multiple');
+    await dialog
+      .getByRole('textbox', { name: 'Вариант 1 вопроса 2', exact: true })
+      .fill('Надеть каску');
+    await dialog
+      .getByRole('textbox', { name: 'Вариант 2 вопроса 2', exact: true })
+      .fill('Проверить ограждения');
+    await dialog
+      .getByRole('checkbox', { name: 'Правильный ответ 2 на вопрос 2', exact: true })
+      .check();
+    await dialog.getByRole('button', { name: 'Сохранить урок', exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await adminApi(page, `/api/courses/${course.id}/lessons`, {
+      title: 'Завершающий тест',
+      type: 'quiz',
+      position: 1,
+      activity: {
+        questions: [
+          {
+            id: 'final',
+            prompt: 'Что сделать при опасности?',
+            options: ['Остановить работу', 'Продолжить'],
+            correctIndex: 0,
+          },
+        ],
+      },
+    });
+    await page.reload();
+    await page
+      .getByRole('button', { name: 'Редактировать Сцена с проверкой знаний', exact: true })
+      .click();
+    const edit = page.getByRole('dialog', { name: 'Редактировать урок' });
+    await expect(edit.locator('.question-editor')).toHaveCount(2);
+    await expect(
+      edit.getByRole('checkbox', { name: 'Правильный ответ 2 на вопрос 2', exact: true }),
+    ).toBeChecked();
+    await edit.getByRole('button', { name: 'Закрыть', exact: true }).click();
+    await page.getByRole('button', { name: 'Опубликовать', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Снять с публикации', exact: true }),
+    ).toBeVisible();
+    learner = await browser.newPage({ baseURL });
+    await login(learner, 'student@praktika.test', 'DemoStudent2026!');
+    await learner.goto(`/courses/${course.id}`);
+    await learner.getByRole('button', { name: 'Записаться на курс', exact: true }).click();
+    const canvas = learner.locator('.hotspot-scene');
+    await expect(learner.getByRole('radio')).toHaveCount(2);
+    await expect(learner.getByRole('checkbox')).toHaveCount(2);
+    await expect(learner.locator('.target-zone')).toHaveCount(0);
+    const button = learner.getByRole('button', { name: 'Отправить решение и ответы', exact: true });
+    await expect(button).toBeDisabled();
+    await learner.getByRole('radio', { name: 'Руководителю', exact: true }).check();
+    await expect(button).toBeDisabled();
+    await learner.getByRole('checkbox', { name: 'Надеть каску', exact: true }).check();
+    await expect(button).toBeEnabled();
+    await canvas.scrollIntoViewIfNeeded();
+    const box = (await canvas.boundingBox())!;
+    await learner.mouse.click(box.x + box.width * 0.1, box.y + box.height * 0.8);
+    const sceneBottom = (await canvas.boundingBox())!;
+    const questionTop = (await learner.locator('.quiz-question').first().boundingBox())!;
+    expect(questionTop.y).toBeGreaterThan(sceneBottom.y + sceneBottom.height);
+    await learner.setViewportSize({ width: 390, height: 844 });
+    expect(await learner.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await learner.setViewportSize({ width: 1440, height: 1050 });
+    await learner.screenshot({ path: 'test-results/visual-with-questions.png', fullPage: true });
+    await button.click();
+    await expect(
+      learner.getByRole('heading', { name: 'Ответ сохранён', exact: true }),
+    ).toBeVisible();
+    await expect(
+      learner.getByRole('link', { name: 'Посмотреть результаты', exact: true }),
+    ).toHaveCount(0);
+    await expect(learner.locator('.quiz-question')).toHaveCount(0);
+    await learner.reload();
+    await expect(
+      learner.getByRole('heading', { name: 'Ответ сохранён', exact: true }),
+    ).toBeVisible();
+    await learner.getByRole('link', { name: 'Следующий урок', exact: true }).click();
+    await learner.getByRole('radio', { name: 'Остановить работу', exact: true }).check();
+    await learner.getByRole('button', { name: 'Отправить ответы', exact: true }).click();
+    await learner.getByRole('link', { name: 'Посмотреть результаты', exact: true }).click();
+    await expect(learner.locator('.assessment-total-score')).toHaveText('83,34%');
+    await expect(
+      learner
+        .getByRole('row')
+        .filter({ hasText: 'Сцена с проверкой знаний' })
+        .getByText('66,67%', { exact: true }),
+    ).toBeVisible();
+    await page.goto('/admin/reports');
+    await page.getByRole('textbox', { name: 'Поиск результатов', exact: true }).fill(course.title);
+    await page.getByRole('button', { name: /Результаты .*Визуальное задание с вопросами/ }).click();
+    const report = page.getByRole('dialog', { name: 'Результаты ученика' });
+    await report
+      .getByRole('row')
+      .filter({ hasText: 'Сцена с проверкой знаний' })
+      .getByText('По вопросам', { exact: true })
+      .click();
+    await expect(
+      report.locator('.question-scores').first().getByText('50%', { exact: true }),
+    ).toHaveCount(2);
+    await expect(
+      report.locator('.question-scores').first().getByText('100%', { exact: true }),
+    ).toBeVisible();
+  } finally {
+    await learner?.close();
+    await adminApi(page, `/api/courses/${course.id}`, { confirm: true }, 'DELETE');
+  }
+});

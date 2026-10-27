@@ -4170,6 +4170,18 @@ td .table-subtext {
 .zone-score-field {
   grid-column: 1/-1;
 }
+.visual-question-heading {
+  margin: 24px 0 18px;
+}
+.visual-question-heading p {
+  margin-top: 8px;
+  color: #7f8d72;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.visual-question-section {
+  margin-top: 28px;
+}
 .submission-notice {
   display: flex;
   gap: 14px;
