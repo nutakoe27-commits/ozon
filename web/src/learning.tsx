@@ -1,43 +1,61 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   ArrowRight,
-  Award,
   Check,
   CheckCircle2,
   ChevronRight,
-  CircleHelp,
   HardHat,
   ListChecks,
-  LockKeyhole,
-  RotateCcw,
+  ShieldCheck,
   Sparkles,
-  Video,
 } from 'lucide-react';
-import { api, post, useResource } from './api';
+import { post, useResource } from './api';
 import type { Course, Lesson } from './types';
 import { Empty, ErrorMessage, Loading, useNotice } from './ui';
 import { VideoPlayer } from './VideoPlayer';
 import { HotspotScene } from './Hotspot';
-function Quiz({ lesson, onPassed }: { lesson: Lesson; onPassed: (id: string | null) => void }) {
+function SubmittedNotice() {
+  return (
+    <div className="submission-notice" role="status">
+      <CheckCircle2 size={26} />
+      <div>
+        <h3>Ответ сохранён</h3>
+        <p>
+          Перейдите к следующему уроку. Результаты откроются после завершения всего курса. Повторная
+          отправка недоступна.
+        </p>
+      </div>
+    </div>
+  );
+}
+function Quiz({
+  lesson,
+  onSubmitted,
+  onConflict,
+}: {
+  lesson: Lesson;
+  onSubmitted: (available: boolean) => void;
+  onConflict: () => void;
+}) {
   const [answers, setAnswers] = useState<Record<string, number | number[]>>({});
-  const [result, setResult] = useState<any>();
   const [busy, setBusy] = useState(false);
   const notice = useNotice();
   const questions = lesson.activity.questions || [];
   async function submit() {
     setBusy(true);
     try {
-      const r = await post(`/api/lessons/${lesson.id}/attempt`, { response: answers });
-      setResult(r);
-      if (r.passed) onPassed(r.certificateId);
-    } catch (e) {
-      notice((e as Error).message, true);
+      const result = await post(`/api/lessons/${lesson.id}/attempt`, { response: answers });
+      onSubmitted(result.resultsAvailable);
+    } catch (error) {
+      if ((error as any).status === 409) onConflict();
+      else notice((error as Error).message, true);
     } finally {
       setBusy(false);
     }
   }
+  if (lesson.submitted_at) return <SubmittedNotice />;
   return (
     <div className="exercise">
       <div className="exercise-heading">
@@ -46,8 +64,8 @@ function Quiz({ lesson, onPassed }: { lesson: Lesson; onPassed: (id: string | nu
         </span>
         <div>
           <span className="eyebrow">ПРОВЕРКА ЗНАНИЙ</span>
-          <h2>Время закрепить материал</h2>
-          <p>Для успешного прохождения наберите не менее {lesson.activity.passPercent}%.</p>
+          <h2>Ответьте на все вопросы</h2>
+          <p>Одна попытка. После отправки изменить ответы нельзя.</p>
         </div>
         <span className="xp-tag">
           <Sparkles size={14} />
@@ -55,18 +73,15 @@ function Quiz({ lesson, onPassed }: { lesson: Lesson; onPassed: (id: string | nu
         </span>
       </div>
       {questions.map((q, i) => (
-        <fieldset
-          className={`quiz-question ${result ? (result.feedback.find((f: any) => f.id === q.id)?.correct ? 'correct' : 'incorrect') : ''}`}
-          key={q.id}
-        >
+        <fieldset className="quiz-question" key={q.id}>
           <legend>
             <span>{String(i + 1).padStart(2, '0')}</span>
             {q.prompt}
           </legend>
           <p className="question-hint">
             {q.multiple
-              ? 'Выберите все правильные варианты. Лишние ответы не допускаются.'
-              : 'Выберите один правильный вариант.'}
+              ? 'Отметьте варианты, которые считаете правильными. Неверные галочки уменьшают балл.'
+              : 'Выберите один вариант.'}
           </p>
           {q.options.map((option, index) => {
             const answer = answers[q.id];
@@ -80,7 +95,7 @@ function Quiz({ lesson, onPassed }: { lesson: Lesson; onPassed: (id: string | nu
                   name={q.id}
                   value={index}
                   checked={selected}
-                  disabled={!!result}
+                  disabled={busy}
                   onChange={(event) => {
                     const checked = event.currentTarget.checked;
                     setAnswers((previous) => {
@@ -103,86 +118,53 @@ function Quiz({ lesson, onPassed }: { lesson: Lesson; onPassed: (id: string | nu
               </label>
             );
           })}
-          {result && (
-            <p className="question-feedback">
-              {result.feedback.find((f: any) => f.id === q.id)?.correct
-                ? 'Верно. '
-                : 'Пока неверно. '}
-              {result.feedback.find((f: any) => f.id === q.id)?.explanation}
-            </p>
-          )}
         </fieldset>
       ))}
-      {result ? (
-        <div className={`exercise-result ${result.passed ? 'success' : 'retry'}`} role="status">
-          {result.passed ? <CheckCircle2 size={25} /> : <CircleHelp size={25} />}
-          <div>
-            <h3>{result.passed ? 'Отличная работа!' : 'Попробуйте ещё раз'}</h3>
-            <p>
-              Ваш результат: {result.score}%.{' '}
-              {result.passed
-                ? 'Урок пройден, баллы начислены.'
-                : 'Прочитайте пояснения и закрепите знания.'}
-            </p>
-          </div>
-          {!result.passed && (
-            <button
-              className="button secondary"
-              onClick={() => {
-                setResult(undefined);
-                setAnswers({});
-              }}
-            >
-              <RotateCcw size={16} />
-              Повторить
-            </button>
-          )}
-        </div>
-      ) : (
-        <button
-          className="button primary"
-          disabled={
-            busy ||
-            questions.length === 0 ||
-            questions.some((q) => {
-              const answer = answers[q.id];
-              return q.multiple
-                ? !Array.isArray(answer) || answer.length === 0
-                : typeof answer !== 'number';
-            })
-          }
-          onClick={() => void submit()}
-        >
-          {busy ? 'Проверяем…' : 'Проверить ответы'}
-          <ArrowRight size={18} />
-        </button>
-      )}
+      <button
+        className="button primary"
+        disabled={
+          busy ||
+          questions.length === 0 ||
+          questions.some((q) => {
+            const answer = answers[q.id];
+            return q.multiple
+              ? !Array.isArray(answer) || answer.length === 0
+              : typeof answer !== 'number';
+          })
+        }
+        onClick={() => void submit()}
+      >
+        {busy ? 'Сохраняем…' : 'Отправить ответы'}
+        <ArrowRight size={18} />
+      </button>
     </div>
   );
 }
 function HotspotExercise({
   lesson,
-  onPassed,
+  onSubmitted,
+  onConflict,
 }: {
   lesson: Lesson;
-  onPassed: (id: string | null) => void;
+  onSubmitted: (available: boolean) => void;
+  onConflict: () => void;
 }) {
   const [point, setPoint] = useState(() => lesson.activity.start ?? { x: 50, y: 85 });
-  const [result, setResult] = useState<any>();
   const [busy, setBusy] = useState(false);
   const notice = useNotice();
   async function submit() {
     setBusy(true);
     try {
-      const r = await post(`/api/lessons/${lesson.id}/attempt`, { response: point });
-      setResult(r);
-      if (r.passed) onPassed(r.certificateId);
-    } catch (e) {
-      notice((e as Error).message, true);
+      const result = await post(`/api/lessons/${lesson.id}/attempt`, { response: point });
+      onSubmitted(result.resultsAvailable);
+    } catch (error) {
+      if ((error as any).status === 409) onConflict();
+      else notice((error as Error).message, true);
     } finally {
       setBusy(false);
     }
   }
+  if (lesson.submitted_at) return <SubmittedNotice />;
   return (
     <div className="exercise">
       <div className="exercise-heading">
@@ -190,8 +172,8 @@ function HotspotExercise({
           <HardHat size={26} />
         </span>
         <div>
-          <span className="eyebrow">СИТУАЦИОННАЯ ПРАКТИКА</span>
-          <h2>Действуйте безопасно</h2>
+          <span className="eyebrow">СИТУАЦИОННАЯ ПРОВЕРКА</span>
+          <h2>Выберите своё решение</h2>
           <p>{lesson.activity.instruction}</p>
         </div>
         <span className="xp-tag">
@@ -200,36 +182,20 @@ function HotspotExercise({
         </span>
       </div>
       <div className="scene-help">
-        <span>Переместите работника в нужную точку сцены.</span>
-        <small>Мышь, касание или стрелки клавиатуры</small>
+        <span>Переместите работника в выбранную точку. После отправки ответ изменить нельзя.</span>
+        <small>Мышь, касание или стрелки</small>
       </div>
-      <HotspotScene
-        image={lesson.image_id ? `/api/media/${lesson.image_id}/image.webp` : undefined}
-        point={point}
-        onPoint={(p) => {
-          setPoint(p);
-          if (!result?.passed) setResult(undefined);
-        }}
-      />
-      {result && (
-        <div className={`exercise-result ${result.passed ? 'success' : 'retry'}`} role="status">
-          {result.passed ? <CheckCircle2 size={24} /> : <CircleHelp size={24} />}
-          <div>
-            <h3>
-              {result.passed
-                ? 'Верно! Вы выбрали безопасное место.'
-                : 'Здесь находиться небезопасно'}
-            </h3>
-            <p>{result.explanation}</p>
-          </div>
-        </div>
-      )}
-      {!result?.passed && (
-        <button className="button primary" disabled={busy} onClick={() => void submit()}>
-          {busy ? 'Проверяем…' : 'Проверить решение'}
-          <ArrowRight size={18} />
-        </button>
-      )}
+      <div className={busy ? 'assessment-pending' : ''}>
+        <HotspotScene
+          image={lesson.image_id ? `/api/media/${lesson.image_id}/image.webp` : undefined}
+          point={point}
+          onPoint={setPoint}
+        />
+      </div>
+      <button className="button primary" disabled={busy} onClick={() => void submit()}>
+        {busy ? 'Сохраняем…' : 'Отправить решение'}
+        <ArrowRight size={18} />
+      </button>
     </div>
   );
 }
@@ -273,13 +239,10 @@ function LessonVideo({
 export function LessonPage() {
   const { courseId, lessonId } = useParams();
   const { data, error, refresh, setData } = useResource<Course>(`/api/courses/${courseId}`);
-  const navigate = useNavigate();
   const notice = useNotice();
-  const [certificate, setCertificate] = useState<string | null>(null);
   const progressInFlight = useRef(false);
   const previousLesson = useRef(lessonId);
   useEffect(() => {
-    setCertificate(null);
     if (previousLesson.current !== lessonId) refresh();
     previousLesson.current = lessonId;
   }, [lessonId, refresh]);
@@ -298,17 +261,23 @@ export function LessonPage() {
   const index = lessons.indexOf(lesson);
   const next = lessons[index + 1];
   const completed = lessons.filter((l) => l.completed_at).length;
-  function passed(cert: string | null) {
-    setCertificate(cert);
-    setData((c) =>
-      c
+  function markComplete(available: boolean, submitted = true) {
+    setData((course) =>
+      course
         ? {
-            ...c,
-            lessons: c.lessons?.map((l) =>
-              l.id === lessonId ? { ...l, completed_at: new Date().toISOString() } : l,
+            ...course,
+            results_available: available,
+            lessons: course.lessons?.map((item) =>
+              item.id === lessonId
+                ? {
+                    ...item,
+                    completed_at: new Date().toISOString(),
+                    ...(submitted ? { submitted_at: new Date().toISOString() } : {}),
+                  }
+                : item,
             ),
           }
-        : c,
+        : course,
     );
   }
   async function progress(position: number, rate: number) {
@@ -316,7 +285,11 @@ export function LessonPage() {
     progressInFlight.current = true;
     try {
       const r = await post(`/api/lessons/${lessonId}/progress`, { position, rate });
-      if (r.completed_at && !lesson?.completed_at) passed(r.certificateId);
+      if (
+        r.completed_at &&
+        (!lesson?.completed_at || r.resultsAvailable !== data?.results_available)
+      )
+        markComplete(r.resultsAvailable, false);
     } catch (e) {
       notice(`Прогресс не сохранён: ${(e as Error).message}`, true);
     } finally {
@@ -339,7 +312,7 @@ export function LessonPage() {
             {lesson.completed_at && (
               <span className="pill green">
                 <Check size={14} />
-                Урок пройден
+                {lesson.type === 'video' ? 'Просмотр завершён' : 'Ответ отправлен'}
               </span>
             )}
           </div>
@@ -366,22 +339,32 @@ export function LessonPage() {
               <div className="panel">
                 {lesson.body && <p className="exercise-intro">{lesson.body}</p>}
                 {lesson.type === 'quiz' ? (
-                  <Quiz key={lesson.id} lesson={lesson} onPassed={passed} />
+                  <Quiz
+                    key={lesson.id}
+                    lesson={lesson}
+                    onSubmitted={markComplete}
+                    onConflict={refresh}
+                  />
                 ) : (
-                  <HotspotExercise key={lesson.id} lesson={lesson} onPassed={passed} />
+                  <HotspotExercise
+                    key={lesson.id}
+                    lesson={lesson}
+                    onSubmitted={markComplete}
+                    onConflict={refresh}
+                  />
                 )}
               </div>
             </>
           )}
-          {certificate && (
+          {data.results_available && (
             <div className="course-success">
-              <Award size={35} />
+              <ShieldCheck size={35} />
               <div>
-                <h3>Курс завершён. Поздравляем!</h3>
-                <p>Ваш сертификат уже ждёт в достижениях.</p>
+                <h3>Все уроки завершены</h3>
+                <p>Ответы сохранены. Теперь можно посмотреть результат проверки.</p>
               </div>
-              <Link className="button primary" to={`/certificates/${certificate}`}>
-                Получить сертификат
+              <Link className="button primary" to={`/courses/${courseId}/results`}>
+                Посмотреть результаты
                 <ArrowRight size={17} />
               </Link>
             </div>
@@ -401,9 +384,14 @@ export function LessonPage() {
                 <ArrowRight size={17} />
               </Link>
             ) : (
-              <Link className="button secondary" to="/achievements">
-                Мои достижения
-                <Award size={17} />
+              <Link
+                className="button secondary"
+                to={
+                  data.results_available ? `/courses/${courseId}/results` : `/courses/${courseId}`
+                }
+              >
+                {data.results_available ? 'Результаты проверки' : 'К программе курса'}
+                <ArrowRight size={17} />
               </Link>
             )}
           </div>
@@ -412,7 +400,7 @@ export function LessonPage() {
           <div>
             <h3>Программа курса</h3>
             <span>
-              {completed} из {lessons.length} уроков пройдено
+              {completed} из {lessons.length} уроков завершено
             </span>
             <div className="progress-line">
               <span style={{ width: `${(completed / lessons.length) * 100}%` }} />

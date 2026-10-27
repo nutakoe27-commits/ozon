@@ -64,6 +64,7 @@ const zoneSchema = z
     y: coordinate,
     width: z.number().min(3).max(100),
     height: z.number().min(3).max(100),
+    score: z.union([z.literal(50), z.literal(100)]).default(100),
   })
   .refine((zone) => zone.x + zone.width <= 100 && zone.y + zone.height <= 100, {
     message: 'Безопасная зона должна находиться внутри сцены',
@@ -84,7 +85,7 @@ export const hotspotSchema = z
     ...activity,
     targets: targets ?? [target!],
   }));
-export function safeLesson(lesson: Record<string, any>, admin: boolean) {
+export function safeLesson(lesson: Record<string, any>, admin: boolean, revealResults = false) {
   if (admin) return lesson;
   const activity =
     lesson.type === 'quiz'
@@ -103,8 +104,8 @@ export function safeLesson(lesson: Record<string, any>, admin: boolean) {
             start: lesson.activity.start ?? { x: 50, y: 85 },
           }
         : {};
-  const { video_error, ...visible } = lesson;
-  return { ...visible, activity };
+  const { video_error, score, passed, attempt_id, ...visible } = lesson;
+  return { ...visible, activity, ...(revealResults ? { score, passed } : {}) };
 }
 export function evaluate(type: string, activity: any, response: unknown) {
   if (type === 'quiz') {
@@ -117,31 +118,39 @@ export function evaluate(type: string, activity: any, response: unknown) {
         message: 'Варианты ответа не должны повторяться',
       });
     const answers = z.record(z.string(), z.union([index, selection])).parse(response);
-    const feedback = quiz.questions.map((q) => {
+    const details = quiz.questions.map((q) => {
       const given = answers[q.id];
+      let score = 0;
+      if (q.multiple && Array.isArray(given)) {
+        const correct = q.correctIndexes!;
+        const hits = given.filter((value) => correct.includes(value)).length;
+        const wrong = given.length - hits;
+        score = Math.max(0, Math.min(100, ((hits - wrong) / correct.length) * 100));
+      } else if (!q.multiple && typeof given === 'number' && given === q.correctIndex) score = 100;
       return {
         id: q.id,
-        correct: q.multiple
-          ? Array.isArray(given) &&
-            given.length === q.correctIndexes!.length &&
-            q.correctIndexes!.every((value) => given.includes(value))
-          : typeof given === 'number' && given === q.correctIndex,
-        explanation: q.explanation,
+        prompt: q.prompt,
+        score: Math.round(score * 100) / 100,
       };
     });
-    const score = Math.round(
-      (feedback.filter((q) => q.correct).length / quiz.questions.length) * 100,
-    );
-    return { score, passed: score >= quiz.passPercent, feedback };
+    const score =
+      Math.round((details.reduce((sum, q) => sum + q.score, 0) / quiz.questions.length) * 100) /
+      100;
+    return { score, passed: score >= quiz.passPercent, details };
   }
   if (type === 'hotspot') {
     const a = hotspotSchema.parse(activity);
     const point = pointSchema.parse(response);
-    const passed = a.targets.some(
+    const matches = a.targets.filter(
       (t) =>
         point.x >= t.x && point.x <= t.x + t.width && point.y >= t.y && point.y <= t.y + t.height,
     );
-    return { score: passed ? 100 : 0, passed, explanation: a.explanation };
+    const score = matches.reduce((best, zone) => Math.max(best, zone.score), 0);
+    return {
+      score,
+      passed: score === 100,
+      details: [{ id: 'scene', prompt: a.instruction, score }],
+    };
   }
   throw new HttpError(400, 'У этого урока нет задания');
 }
@@ -172,26 +181,17 @@ export async function issueCertificate(userId: string, courseId: string) {
   await sql(
     `INSERT INTO certificates(id,user_id,course_id)
     SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM lessons WHERE course_id=$3)
-    AND NOT EXISTS(SELECT 1 FROM lessons l LEFT JOIN progress p ON p.lesson_id=l.id AND p.user_id=$2 WHERE l.course_id=$3 AND p.completed_at IS NULL)
+    AND NOT EXISTS(SELECT 1 FROM lessons l LEFT JOIN progress p ON p.lesson_id=l.id AND p.user_id=$2 WHERE l.course_id=$3 AND (p.completed_at IS NULL OR (l.type<>'video' AND NOT COALESCE(p.passed,false))))
     ON CONFLICT(user_id,course_id) DO NOTHING`,
     [randomUUID(), userId, courseId],
   );
   const [certificate] = await sql(
     `SELECT id FROM certificates WHERE user_id=$1 AND course_id=$2
     AND EXISTS(SELECT 1 FROM lessons WHERE course_id=$2)
-    AND NOT EXISTS(SELECT 1 FROM lessons l LEFT JOIN progress p ON p.lesson_id=l.id AND p.user_id=$1 WHERE l.course_id=$2 AND p.completed_at IS NULL)`,
+    AND NOT EXISTS(SELECT 1 FROM lessons l LEFT JOIN progress p ON p.lesson_id=l.id AND p.user_id=$1 WHERE l.course_id=$2 AND (p.completed_at IS NULL OR (l.type<>'video' AND NOT COALESCE(p.passed,false))))`,
     [userId, courseId],
   );
   return certificate?.id || null;
-}
-export async function completeLesson(userId: string, lesson: any, score: number) {
-  const xp = lesson.type === 'video' ? 30 : lesson.type === 'quiz' ? 50 : 75;
-  await sql(
-    `INSERT INTO progress(user_id,lesson_id,completed_at,score,xp) VALUES($1,$2,now(),$3,$4)
-    ON CONFLICT(user_id,lesson_id) DO UPDATE SET completed_at=COALESCE(progress.completed_at,now()),score=GREATEST(progress.score,excluded.score),xp=excluded.xp,updated_at=now()`,
-    [userId, lesson.id, score, xp],
-  );
-  return issueCertificate(userId, lesson.course_id);
 }
 export async function saveVideoProgress(userId: string, lesson: any, position: number, rate = 1) {
   if (!lesson.video_id || lesson.video_status !== 'ready' || !(lesson.duration > 0))

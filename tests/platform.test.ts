@@ -211,47 +211,62 @@ test('student payload contains neither correct answers nor target coordinates', 
     404,
   );
 });
-test('server scores incorrect and correct quiz responses', async () => {
-  const wrong = await request('POST', `/api/lessons/${quizId}/attempt`, student, {
-    response: { q1: 0 },
-  });
-  assert.equal(wrong.json().passed, false);
-  const correct = await request('POST', `/api/lessons/${quizId}/attempt`, student, {
+test('quiz submission is blind, immutable and recorded before final course results', async () => {
+  const saved = await request('POST', `/api/lessons/${quizId}/attempt`, student, {
     response: { q1: 1 },
   });
-  assert.equal(correct.json().score, 100);
-  assert.equal(correct.json().passed, true);
-  assert.equal(correct.json().certificateId, null);
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.deepEqual(saved.json(), { submitted: true, resultsAvailable: false });
+  const view = (await request('GET', `/api/courses/${courseId}`, student)).json();
+  assert.equal(view.lessons[0].score, undefined);
+  assert.equal(view.lessons[0].passed, undefined);
+  assert.ok(view.lessons[0].submitted_at);
+  assert.equal((await request('GET', `/api/courses/${courseId}/results`, student)).statusCode, 409);
+  assert.equal(
+    (await request('POST', `/api/lessons/${quizId}/attempt`, student, { response: { q1: 0 } }))
+      .statusCode,
+    409,
+  );
+  const [stored] = await sql(
+    'SELECT score,passed FROM progress WHERE user_id=$1 AND lesson_id=$2',
+    [studentId, quizId],
+  );
+  assert.equal(stored.score, 100);
+  assert.equal(stored.passed, true);
 });
-test('hotspot evaluates coordinates server-side, awards XP once and issues certificate', async () => {
+
+test('the final visual submission unlocks aggregate results without revealing answers', async () => {
+  const saved = await request('POST', `/api/lessons/${hotspotId}/attempt`, student, {
+    response: { x: 20, y: 30 },
+  });
+  assert.deepEqual(saved.json(), { submitted: true, resultsAvailable: true });
+  const result = await request('GET', `/api/courses/${courseId}/results`, student);
+  assert.equal(result.statusCode, 200, result.body);
+  assert.equal(result.json().score, 100);
+  const certId = result.json().certificateId;
+  assert.ok(certId);
+  assert.equal((await request('GET', `/api/certificates/${certId}`, student)).statusCode, 200);
+  assert.equal((await request('GET', `/api/certificates/${certId}`, outsider)).statusCode, 404);
   assert.equal(
     (
       await request('POST', `/api/lessons/${hotspotId}/attempt`, student, {
         response: { x: 80, y: 80 },
       })
-    ).json().passed,
-    false,
+    ).statusCode,
+    409,
   );
-  const r = await request('POST', `/api/lessons/${hotspotId}/attempt`, student, {
-    response: { x: 20, y: 30 },
-  });
-  assert.equal(r.json().passed, true);
-  assert.ok(r.json().certificateId);
-  const certId = r.json().certificateId;
-  assert.equal((await request('GET', `/api/certificates/${certId}`, student)).statusCode, 200);
-  assert.equal((await request('GET', `/api/certificates/${certId}`, outsider)).statusCode, 404);
-  await request('POST', `/api/lessons/${hotspotId}/attempt`, student, {
-    response: { x: 20, y: 30 },
-  });
   const [stats] = await sql('SELECT sum(xp)::int AS xp FROM progress WHERE user_id=$1', [
     studentId,
   ]);
   assert.equal(stats.xp, 125);
-  const [count] = await sql('SELECT count(*)::int AS count FROM certificates WHERE user_id=$1', [
-    studentId,
-  ]);
-  assert.equal(count.count, 1);
+  assert.equal((await sql('SELECT * FROM certificates WHERE user_id=$1', [studentId])).length, 1);
+  for (const lesson of result.json().lessons) {
+    assert.equal(lesson.details, undefined);
+    assert.equal(lesson.response, undefined);
+    assert.equal(lesson.activity, undefined);
+  }
 });
+
 test('started published courses can be edited without losing results; a copy remains independent', async () => {
   const before = await sql('SELECT * FROM progress WHERE lesson_id=$1 ORDER BY user_id', [quizId]);
   const certificates = await sql('SELECT * FROM certificates WHERE course_id=$1', [courseId]);
@@ -424,7 +439,10 @@ test('a genuine elapsed viewing interval completes video and issues its course c
     rate: 1,
   });
   assert.ok(r.json().completed_at, r.body);
-  assert.ok(r.json().certificateId);
+  assert.equal(r.json().resultsAvailable, true);
+  assert.ok(
+    (await request('GET', `/api/courses/${videoCourseId}/results`, student)).json().certificateId,
+  );
 });
 test('invalid container fails safely and exposes retryable processing status', async () => {
   const r = await request('POST', '/api/uploads', admin, { name: 'malicious.mp4', size: 16 });
@@ -545,8 +563,7 @@ test('a published course in progress can be deleted without affecting shared med
   const attempt = await request('POST', `/api/lessons/${exercise.json().id}/attempt`, student, {
     response: { q1: 1 },
   });
-  assert.equal(attempt.json().passed, true);
-  assert.equal(attempt.json().certificateId, null);
+  assert.deepEqual(attempt.json(), { submitted: true, resultsAvailable: false });
   const [before] = await sql(
     'SELECT count(*)::int AS count FROM progress WHERE lesson_id IN ($1,$2)',
     [video.json().id, exercise.json().id],
@@ -670,22 +687,23 @@ test('a live multi-zone lesson stores its starting point, grades each zone and h
   assert.deepEqual(activity.start, body.activity.start);
   assert.equal(activity.targets, undefined);
   assert.equal(activity.target, undefined);
-  assert.equal(
+  assert.deepEqual(
     (
       await request('POST', `/api/lessons/${lesson.json().id}/attempt`, outsider, {
         response: { x: 10, y: 20 },
       })
-    ).json().passed,
-    true,
+    ).json(),
+    { submitted: true, resultsAvailable: true },
   );
   assert.equal(
     (
       await request('POST', `/api/lessons/${lesson.json().id}/attempt`, outsider, {
         response: { x: 70, y: 70 },
       })
-    ).json().passed,
-    true,
+    ).statusCode,
+    409,
   );
+  assert.equal((await request('GET', `/api/courses/${id}/results`, outsider)).json().score, 100);
   const edit = await request('PATCH', `/api/lessons/${lesson.json().id}`, admin, {
     activity: { ...body.activity, start: { x: 40, y: 80 } },
   });
@@ -708,7 +726,9 @@ test('new lessons on a completed live course preserve its certificate without re
   const done = await request('POST', `/api/lessons/${first.id}/attempt`, outsider, {
     response: { q1: 1 },
   });
-  const certificate = done.json().certificateId;
+  assert.equal(done.json().resultsAvailable, true);
+  const certificate = (await request('GET', `/api/courses/${course.id}/results`, outsider)).json()
+    .certificateId;
   assert.ok(certificate);
   const extra = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
     title: 'Новый материал курса',
@@ -718,10 +738,13 @@ test('new lessons on a completed live course preserve its certificate without re
   });
   assert.equal(extra.statusCode, 201, extra.body);
   assert.equal(
-    (
-      await request('POST', `/api/lessons/${first.id}/attempt`, outsider, { response: { q1: 1 } })
-    ).json().certificateId,
-    null,
+    (await request('POST', `/api/lessons/${first.id}/attempt`, outsider, { response: { q1: 1 } }))
+      .statusCode,
+    409,
+  );
+  assert.equal(
+    (await request('GET', `/api/courses/${course.id}/results`, outsider)).statusCode,
+    409,
   );
   assert.equal(
     (await request('GET', `/api/certificates/${certificate}`, outsider)).statusCode,
@@ -735,7 +758,11 @@ test('new lessons on a completed live course preserve its certificate without re
       await request('POST', `/api/lessons/${extra.json().id}/attempt`, outsider, {
         response: { q1: 1 },
       })
-    ).json().certificateId,
+    ).json().resultsAvailable,
+    true,
+  );
+  assert.equal(
+    (await request('GET', `/api/courses/${course.id}/results`, outsider)).json().certificateId,
     certificate,
   );
   assert.equal((await request('DELETE', `/api/lessons/${extra.json().id}`, admin)).statusCode, 200);
@@ -792,16 +819,21 @@ test('quiz video and photo stay private, watching does not pass the test or over
   });
   assert.equal(viewing.statusCode, 200, viewing.body);
   assert.equal(viewing.json().completed_at, null);
-  assert.equal(viewing.json().xp, 0);
-  assert.equal(viewing.json().certificateId, null);
+  assert.equal(viewing.json().score, undefined);
+  assert.equal(viewing.json().xp, undefined);
+  assert.equal(viewing.json().certificateId, undefined);
   const completed = await request('POST', `/api/lessons/${lesson.json().id}/attempt`, student, {
     response: { q1: 1 },
   });
-  assert.ok(completed.json().certificateId);
+  assert.equal(completed.json().resultsAvailable, true);
+  assert.ok(
+    (await request('GET', `/api/courses/${course.id}/results`, student)).json().certificateId,
+  );
   const afterwards = await request('POST', `/api/lessons/${lesson.json().id}/progress`, student, {
     position: 2,
   });
-  assert.equal(afterwards.json().xp, 50);
+  assert.equal(afterwards.json().score, undefined);
+  assert.equal(afterwards.json().passed, undefined);
   assert.ok(afterwards.json().completed_at);
   const reset = await request('PATCH', `/api/lessons/${lesson.json().id}`, admin, {
     video_id: null,
@@ -840,38 +872,44 @@ test('quiz video and photo stay private, watching does not pass the test or over
     400,
   );
 });
-test('multiple-answer grading requires the exact set and supports mixed and legacy questions', () => {
+test('partial checkbox grades subtract wrong choices, retain fractions and support legacy questions', () => {
   const activity = {
-    passPercent: 100,
+    passPercent: 80,
     questions: [
       {
         id: 'multi',
         prompt: 'Выберите безопасные действия',
         multiple: true,
-        options: ['Проверить оборудование', 'Игнорировать риск', 'Надеть средства защиты'],
-        correctIndexes: [0, 2],
-      },
-      {
-        id: 'single',
-        prompt: 'Кому сообщить об опасности?',
-        options: ['Никому', 'Руководителю'],
-        correctIndex: 1,
+        options: ['Первое', 'Второе', 'Третье', 'Четвёртое', 'Неверное', 'Ещё неверное'],
+        correctIndexes: [0, 1, 2, 3],
       },
     ],
   };
-  assert.equal(evaluate('quiz', activity, { multi: [2, 0], single: 1 }).score, 100);
-  for (const selected of [[0], [2], [0, 1, 2], [1], [], 0]) {
-    const result = evaluate('quiz', activity, { multi: selected, single: 1 });
-    assert.equal(result.passed, false);
-    assert.equal(result.score, 50);
-    assert.equal(result.feedback?.[0].correct, false);
+  for (const [selected, score] of [
+    [[], 0],
+    [[0], 25],
+    [[0, 1], 50],
+    [[0, 1, 2], 75],
+    [[3, 2, 1, 0], 100],
+    [[0, 4], 0],
+    [[0, 1, 4], 25],
+    [[0, 1, 2, 3, 4, 5], 50],
+  ] as [number[], number][]) {
+    const result = evaluate('quiz', activity, { multi: selected });
+    assert.equal(result.score, score);
+    assert.equal(result.details[0].score, score);
   }
-  assert.equal(evaluate('quiz', activity, { multi: [0, 2], single: 0 }).score, 50);
-  assert.equal(evaluate('quiz', activity, { multi: [0, 2], single: [1] }).passed, false);
-  assert.throws(() => evaluate('quiz', activity, { multi: [0, 0, 2], single: 1 }));
-  assert.throws(() => evaluate('quiz', activity, { multi: [0, 8], single: 1 }));
-  assert.equal(evaluate('quiz', quiz, { q1: 1 }).passed, true);
+  assert.throws(() => evaluate('quiz', activity, { multi: [0, 0] }));
+  assert.throws(() => evaluate('quiz', activity, { multi: [8] }));
+  assert.equal(evaluate('quiz', quiz, { q1: 1 }).score, 100);
+  assert.equal(evaluate('quiz', quiz, { q1: 0 }).score, 0);
+  const thirds = {
+    ...activity,
+    questions: [{ ...activity.questions[0], correctIndexes: [0, 1, 2] }],
+  };
+  assert.equal(evaluate('quiz', thirds, { multi: [0] }).score, 33.33);
 });
+
 test('quiz constructor validates multiple correct answers and keeps all answer keys private', () => {
   const question = {
     id: 'multi',
@@ -902,78 +940,352 @@ test('quiz constructor validates multiple correct answers and keeps all answer k
   assert.equal(visible.correctIndexes, undefined);
   assert.equal(visible.explanation, undefined);
 });
-test('multiple-answer courses persist configuration, reject partial and extra choices, and award XP once', async () => {
+test('a partial first checkbox submission is final and earns completion XP only once', async () => {
   const course = (
-    await request('POST', '/api/courses', admin, {
-      title: 'Тест с несколькими правильными ответами',
-    })
+    await request('POST', '/api/courses', admin, { title: 'Проверка частичных ответов' })
   ).json();
   const activity = {
-    passPercent: 100,
+    passPercent: 80,
     questions: [
       {
         id: 'multi',
-        prompt: 'Выберите безопасные действия',
+        prompt: 'Отметьте безопасные действия',
         multiple: true,
-        options: ['Проверить оборудование', 'Игнорировать риск', 'Надеть средства защиты'],
-        correctIndexes: [0, 2],
-      },
-      {
-        id: 'single',
-        prompt: 'Кому сообщить об опасности?',
-        options: ['Никому', 'Руководителю'],
-        correctIndex: 1,
+        options: ['Первое', 'Второе', 'Третье', 'Четвёртое', 'Неверное'],
+        correctIndexes: [0, 1, 2, 3],
       },
     ],
   };
-  const invalid = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+  const bad = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
     title: 'Некорректное задание',
     type: 'quiz',
-    activity: { ...activity, questions: [{ ...activity.questions[0], correctIndexes: [3] }] },
+    activity: { ...activity, questions: [{ ...activity.questions[0], correctIndexes: [] }] },
   });
-  assert.equal(invalid.statusCode, 400, invalid.body);
-  const created = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
-    title: 'Безопасные действия',
-    type: 'quiz',
-    activity,
-  });
-  assert.equal(created.statusCode, 201, created.body);
-  const id = created.json().id;
-  assert.deepEqual(created.json().activity.questions[0].correctIndexes, [0, 2]);
+  assert.equal(bad.statusCode, 400);
+  const lesson = (
+    await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+      title: 'Безопасные действия',
+      type: 'quiz',
+      activity,
+    })
+  ).json();
+  assert.deepEqual(lesson.activity.questions[0].correctIndexes, [0, 1, 2, 3]);
   await request('PATCH', `/api/courses/${course.id}`, admin, { published: true });
   await request('POST', `/api/courses/${course.id}/enrollments`, admin, { userIds: [studentId] });
   const before = (await request('GET', '/api/dashboard', student)).json().xp;
-  const view = (await request('GET', `/api/courses/${course.id}`, student)).json().lessons[0]
-    .activity.questions;
-  assert.equal(view[0].multiple, true);
-  assert.equal(view[1].multiple, false);
-  assert.equal(view[0].correctIndexes, undefined);
-  assert.equal(view[1].correctIndex, undefined);
-  for (const selected of [[0], [0, 1, 2]]) {
-    const attempt = await request('POST', `/api/lessons/${id}/attempt`, student, {
-      response: { multi: selected, single: 1 },
-    });
-    assert.equal(attempt.statusCode, 200, attempt.body);
-    assert.equal(attempt.json().score, 50);
-    assert.equal(attempt.json().passed, false);
-    assert.equal(attempt.json().certificateId, null);
+  const saved = await request('POST', `/api/lessons/${lesson.id}/attempt`, student, {
+    response: { multi: [0] },
+  });
+  assert.deepEqual(saved.json(), { submitted: true, resultsAvailable: true });
+  const final = (await request('GET', `/api/courses/${course.id}/results`, student)).json();
+  assert.equal(final.score, 25);
+  assert.equal(final.passed, false);
+  assert.equal(final.certificateId, null);
+  assert.equal(final.lessons[0].score, 25);
+  for (const selection of [
+    [0, 1, 2, 3],
+    [0, 0],
+    [0, 1, 2, 3, 4],
+  ])
+    assert.equal(
+      (
+        await request('POST', `/api/lessons/${lesson.id}/attempt`, student, {
+          response: { multi: selection },
+        })
+      ).statusCode,
+      409,
+    );
+  assert.equal((await request('GET', '/api/dashboard', student)).json().xp, before + 50);
+  assert.equal(
+    (await sql('SELECT * FROM attempts WHERE user_id=$1 AND lesson_id=$2', [studentId, lesson.id]))
+      .length,
+    1,
+  );
+  assert.equal(
+    (await request('GET', `/api/courses/${course.id}/results`, student)).json().score,
+    25,
+  );
+});
+test('visual zones grade green at 100, yellow at 50 and overlap by the best grade', () => {
+  const activity = {
+    instruction: 'Выберите положение работника.',
+    targets: [
+      { x: 10, y: 10, width: 30, height: 30, score: 50 },
+      { x: 20, y: 20, width: 10, height: 10, score: 100 },
+    ],
+    start: { x: 80, y: 80 },
+  };
+  assert.equal(evaluate('hotspot', activity, { x: 15, y: 15 }).score, 50);
+  assert.equal(evaluate('hotspot', activity, { x: 25, y: 25 }).score, 100);
+  assert.equal(evaluate('hotspot', activity, { x: 80, y: 80 }).score, 0);
+  assert.equal(evaluate('hotspot', hotspot, { x: 20, y: 30 }).score, 100);
+  assert.equal(
+    hotspotSchema.safeParse({ ...activity, targets: [{ ...activity.targets[0], score: 75 }] })
+      .success,
+    false,
+  );
+});
+test('grades stay private until the whole course is finished and administrators see each recorded percentage', async () => {
+  const course = (
+    await request('POST', '/api/courses', admin, { title: 'Проверка знаний целиком' })
+  ).json();
+  const activity = {
+    passPercent: 80,
+    questions: [
+      {
+        id: 'four',
+        prompt: 'Отметьте безопасные действия.',
+        multiple: true,
+        options: ['Первое', 'Второе', 'Третье', 'Четвёртое', 'Опасное'],
+        correctIndexes: [0, 1, 2, 3],
+        explanation: 'НЕ ПОКАЗЫВАТЬ УЧЕНИКУ',
+      },
+    ],
+  };
+  const first = (
+    await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+      title: 'Проверка галочек',
+      type: 'quiz',
+      video_id: uploadId,
+      activity,
+    })
+  ).json();
+  const second = (
+    await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+      title: 'Проверка сцены',
+      type: 'hotspot',
+      position: 1,
+      activity: {
+        instruction: 'Выберите место.',
+        targets: [
+          { x: 10, y: 10, width: 20, height: 20, score: 50 },
+          { x: 60, y: 60, width: 20, height: 20, score: 100 },
+        ],
+      },
+    })
+  ).json();
+  await request('PATCH', `/api/courses/${course.id}`, admin, { published: true });
+  await request('POST', `/api/courses/${course.id}/enrollments`, admin, { userIds: [studentId] });
+  const saved = await request('POST', `/api/lessons/${first.id}/attempt`, student, {
+    response: { four: [0] },
+  });
+  assert.deepEqual(saved.json(), { submitted: true, resultsAvailable: false });
+  const visible = (await request('GET', `/api/courses/${course.id}`, student)).json();
+  for (const lesson of visible.lessons) {
+    assert.equal(lesson.score, undefined);
+    assert.equal(lesson.passed, undefined);
+    assert.equal(lesson.attempt_id, undefined);
+    assert.equal(lesson.details, undefined);
   }
+  assert.equal(visible.lessons[0].activity.questions[0].correctIndexes, undefined);
+  assert.equal(visible.lessons[0].activity.questions[0].explanation, undefined);
+  assert.equal(visible.lessons[1].activity.targets, undefined);
+  assert.equal(
+    (await request('GET', `/api/courses/${course.id}/results`, student)).statusCode,
+    409,
+  );
+  const videoPing = await request('POST', `/api/lessons/${first.id}/progress`, student, {
+    position: 1,
+  });
+  assert.equal(videoPing.json().score, undefined);
+  assert.equal(videoPing.json().passed, undefined);
+  assert.equal(videoPing.json().certificateId, undefined);
+  assert.equal(videoPing.json().resultsAvailable, false);
   assert.equal(
     (
-      await request('POST', `/api/lessons/${id}/attempt`, student, {
-        response: { multi: [0, 0, 2], single: 1 },
+      await request('POST', `/api/lessons/${first.id}/attempt`, student, {
+        response: { four: [0, 1, 2, 3] },
       })
     ).statusCode,
+    409,
+  );
+  const adminView = await request('GET', `/api/reports/${studentId}/${course.id}`, admin);
+  assert.equal(adminView.statusCode, 200, adminView.body);
+  assert.equal(adminView.json().lessons[0].score, 25);
+  assert.equal(adminView.json().lessons[0].details[0].score, 25);
+  assert.equal(adminView.json().complete, false);
+  assert.equal(
+    (await request('GET', `/api/reports/${studentId}/${course.id}`, student)).statusCode,
+    403,
+  );
+  assert.equal((await request('GET', '/api/reports/lessons.csv', student)).statusCode, 403);
+  const finish = await request('POST', `/api/lessons/${second.id}/attempt`, student, {
+    response: { x: 15, y: 15 },
+  });
+  assert.deepEqual(finish.json(), { submitted: true, resultsAvailable: true });
+  const result = (await request('GET', `/api/courses/${course.id}/results`, student)).json();
+  assert.equal(result.score, 37.5);
+  assert.equal(result.passed, false);
+  assert.equal(result.certificateId, null);
+  assert.deepEqual(
+    result.lessons.map((l: any) => l.score),
+    [25, 50],
+  );
+  assert.equal(JSON.stringify(result).includes('НЕ ПОКАЗЫВАТЬ'), false);
+  for (const lesson of result.lessons) {
+    assert.equal(lesson.details, undefined);
+    assert.equal(lesson.response, undefined);
+    assert.equal(lesson.activity, undefined);
+  }
+  const rows = (await request('GET', '/api/reports', admin)).json();
+  const row = rows.find((r: any) => r.user_id === studentId && r.course_id === course.id);
+  assert.equal(row.score, 37.5);
+  assert.equal(row.completed, 2);
+  assert.equal(row.submitted, 2);
+  const csv = await request('GET', '/api/reports/lessons.csv', admin);
+  assert.equal(csv.statusCode, 200, csv.body);
+  assert.match(csv.body, /"25"/);
+  assert.match(csv.body, /"50"/);
+  assert.match(csv.body, /'=HYPERLINK/);
+  await request('PATCH', `/api/lessons/${first.id}`, admin, {
+    activity: {
+      ...activity,
+      questions: [
+        {
+          ...activity.questions[0],
+          prompt: 'Изменённый вопрос после отправки',
+          correctIndexes: [0],
+        },
+      ],
+    },
+  });
+  const snapshot = (await request('GET', `/api/reports/${studentId}/${course.id}`, admin)).json();
+  assert.equal(snapshot.lessons[0].details[0].prompt, 'Отметьте безопасные действия.');
+  assert.equal(snapshot.lessons[0].score, 25);
+});
+test('concurrent submissions cannot overwrite the first grade and incomplete forms do not consume a submission', async () => {
+  const course = (
+    await request('POST', '/api/courses', admin, { title: 'Конкурентная отправка проверки' })
+  ).json();
+  const lesson = (
+    await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+      title: 'Единственная попытка',
+      type: 'quiz',
+      activity: quiz,
+    })
+  ).json();
+  await request('PATCH', `/api/courses/${course.id}`, admin, { published: true });
+  await request('POST', `/api/courses/${course.id}/enrollments`, admin, { userIds: [outsiderId] });
+  assert.equal(
+    (await request('POST', `/api/lessons/${lesson.id}/attempt`, outsider, { response: {} }))
+      .statusCode,
     400,
   );
-  const success = await request('POST', `/api/lessons/${id}/attempt`, student, {
-    response: { multi: [2, 0], single: 1 },
-  });
-  assert.equal(success.json().score, 100);
-  assert.ok(success.json().certificateId);
-  const repeated = await request('POST', `/api/lessons/${id}/attempt`, student, {
-    response: { multi: [0, 2], single: 1 },
-  });
-  assert.equal(repeated.json().certificateId, success.json().certificateId);
-  assert.equal((await request('GET', '/api/dashboard', student)).json().xp, before + 50);
+  assert.equal((await sql('SELECT * FROM attempts WHERE lesson_id=$1', [lesson.id])).length, 0);
+  const pair = await Promise.all([
+    request('POST', `/api/lessons/${lesson.id}/attempt`, outsider, { response: { q1: 0 } }),
+    request('POST', `/api/lessons/${lesson.id}/attempt`, outsider, { response: { q1: 1 } }),
+  ]);
+  assert.deepEqual(pair.map((r) => r.statusCode).sort(), [200, 409]);
+  const attempts = await sql('SELECT * FROM attempts WHERE lesson_id=$1', [lesson.id]);
+  assert.equal(attempts.length, 1);
+  const [progress] = await sql('SELECT * FROM progress WHERE lesson_id=$1 AND user_id=$2', [
+    lesson.id,
+    outsiderId,
+  ]);
+  assert.equal(progress.score, evaluate('quiz', quiz, attempts[0].response).score);
+  assert.equal(progress.attempt_id, attempts[0].id);
+  assert.ok(progress.submitted_at);
+  const before = progress.score;
+  assert.equal(
+    (
+      await request('POST', `/api/lessons/${lesson.id}/attempt`, outsider, {
+        response: { q1: before === 100 ? 0 : 1 },
+      })
+    ).statusCode,
+    409,
+  );
+  assert.equal(
+    (
+      await sql('SELECT score FROM progress WHERE lesson_id=$1 AND user_id=$2', [
+        lesson.id,
+        outsiderId,
+      ])
+    )[0].score,
+    before,
+  );
+});
+test('assessment migration preserves old grades and attempts, adopts failed-only results and is repeatable', async () => {
+  const course = (
+    await request('POST', '/api/courses', admin, { title: 'Исторические результаты' })
+  ).json();
+  const first = (
+    await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+      title: 'Исторический зачёт',
+      type: 'quiz',
+      activity: quiz,
+    })
+  ).json();
+  const second = (
+    await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+      title: 'Историческая ошибка',
+      type: 'quiz',
+      activity: quiz,
+      position: 1,
+    })
+  ).json();
+  const oldWrong = randomUUID(),
+    oldRight = randomUUID(),
+    oldPartial = randomUUID();
+  await sql(
+    `INSERT INTO attempts(id,user_id,lesson_id,score,passed,response,created_at) VALUES($1,$2,$3,0,false,'{"q1":0}','2020-01-01T00:00:00Z'),($4,$2,$3,100,true,'{"q1":1}','2020-01-01T00:01:00Z'),($5,$2,$6,30,false,'{"q1":0}','2020-01-01T00:02:00Z')`,
+    [oldWrong, studentId, first.id, oldRight, oldPartial, second.id],
+  );
+  await sql(
+    `INSERT INTO progress(user_id,lesson_id,completed_at,score,xp) VALUES($1,$2,'2020-01-01T00:01:00Z',100,50)`,
+    [studentId, first.id],
+  );
+  const certificates = (await sql('SELECT id FROM certificates ORDER BY id')).map((row) => row.id);
+  await sql("DELETE FROM schema_migrations WHERE version='knowledge-assessment-v1'");
+  await migrate();
+  const rows = await sql(
+    'SELECT * FROM progress WHERE user_id=$1 AND lesson_id IN ($2,$3) ORDER BY score DESC',
+    [studentId, first.id, second.id],
+  );
+  assert.deepEqual(
+    rows.map((row) => row.score),
+    [100, 30],
+  );
+  assert.equal(rows[0].attempt_id, oldRight);
+  assert.equal(rows[0].passed, true);
+  assert.equal(rows[1].attempt_id, oldPartial);
+  assert.equal(rows[1].passed, false);
+  assert.ok(rows.every((row) => row.submitted_at && row.completed_at));
+  assert.equal(
+    (await sql('SELECT * FROM attempts WHERE lesson_id IN ($1,$2)', [first.id, second.id])).length,
+    3,
+  );
+  assert.deepEqual(
+    (await sql('SELECT id FROM certificates ORDER BY id')).map((row) => row.id),
+    certificates,
+  );
+  await migrate();
+  assert.deepEqual(
+    await sql(
+      'SELECT * FROM progress WHERE user_id=$1 AND lesson_id IN ($2,$3) ORDER BY score DESC',
+      [studentId, first.id, second.id],
+    ),
+    rows,
+  );
+  assert.equal(
+    (await sql("SELECT * FROM schema_migrations WHERE version='knowledge-assessment-v1'")).length,
+    1,
+  );
+});
+test('authenticated users behind one IP have separate request limits', async () => {
+  const guarded = await buildApp({ logger: false });
+  try {
+    guarded.get(
+      '/api/test-throttle',
+      { config: { rateLimit: { max: 1, timeWindow: '1 minute' } } },
+      async () => ({ ok: true }),
+    );
+    const call = (headers: Record<string, string>) =>
+      guarded.inject({ method: 'GET', url: '/api/test-throttle', headers });
+    assert.equal((await call(student)).statusCode, 200);
+    assert.equal((await call(student)).statusCode, 429);
+    assert.equal((await call(outsider)).statusCode, 200);
+  } finally {
+    await guarded.close();
+  }
 });

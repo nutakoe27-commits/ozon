@@ -31,7 +31,8 @@ import {
   X,
 } from 'lucide-react';
 import { api, date, post, useResource } from './api';
-import type { Course, Lesson, Media, Question, Zone } from './types';
+import type { AssessmentResult, Course, Lesson, Media, Question, Zone } from './types';
+import { formatPercent } from './results';
 import { CourseCard, Empty, ErrorMessage, Loading, Modal, PageHeading, useNotice } from './ui';
 import { VideoUpload } from './Upload';
 import { HotspotScene } from './Hotspot';
@@ -397,7 +398,7 @@ function LessonEditor({
                   onChange={(e) => activity('passPercent', Number(e.target.value))}
                 />
               </label>
-              <span>Баллы начисляются один раз, за успешное прохождение.</span>
+              <span>XP начисляются за отправку. Оценка знаний сохраняется отдельно.</span>
             </div>
             {draft.activity.questions?.map((q, index) => (
               <div className="question-editor" key={q.id}>
@@ -458,7 +459,7 @@ function LessonEditor({
                 </label>
                 <small className="muted-text">
                   {q.multiple
-                    ? 'Отметьте галочками все правильные варианты. Для зачёта ученик должен выбрать их все без лишних ответов.'
+                    ? 'Каждая верная галочка даёт долю балла, каждая неверная вычитает такую же долю. Одна верная из четырёх даёт 25%.'
                     : 'Отметьте правильный вариант кружком слева.'}
                 </small>
                 {q.options.map((option, optionIndex) => (
@@ -542,7 +543,7 @@ function LessonEditor({
                   </button>
                 )}
                 <label>
-                  Объяснение после проверки
+                  Пояснение для администратора
                   <textarea
                     rows={2}
                     maxLength={2000}
@@ -594,8 +595,8 @@ function LessonEditor({
               <div>
                 <h3>Рабочая сцена</h3>
                 <p>
-                  Правильным ответом будет любая зелёная зона. Выделите зоны и задайте начальное
-                  положение работника.
+                  Зелёная зона даёт 100%, жёлтая — 50%, вне зон — 0%. При пересечении зон
+                  учитывается наибольшая оценка. Результат ученик увидит только после всего курса.
                 </p>
               </div>
               <label className="button secondary small image-upload-label">
@@ -644,7 +645,7 @@ function LessonEditor({
                       setSceneMode('zones');
                     }}
                   >
-                    Зона {index + 1}
+                    Зона {index + 1} · {targets[index].score ?? 100}%
                   </button>
                   <button
                     type="button"
@@ -684,7 +685,7 @@ function LessonEditor({
               onZone={(index, zone) =>
                 activity(
                   'targets',
-                  targets.map((current, i) => (i === index ? zone : current)),
+                  targets.map((current, i) => (i === index ? { ...current, ...zone } : current)),
                 )
               }
               point={draft.activity.start}
@@ -716,6 +717,25 @@ function LessonEditor({
                     />
                   </label>
                 ))}
+                <label className="zone-score-field">
+                  Цвет и оценка зоны
+                  <select
+                    value={selectedZone.score ?? 100}
+                    onChange={(event) =>
+                      activity(
+                        'targets',
+                        targets.map((zone, index) =>
+                          index === activeZone
+                            ? { ...zone, score: Number(event.target.value) as 50 | 100 }
+                            : zone,
+                        ),
+                      )
+                    }
+                  >
+                    <option value={100}>Зелёная — 100%</option>
+                    <option value={50}>Жёлтая — 50%</option>
+                  </select>
+                </label>
               </div>
             )}
             {sceneMode === 'start' && (
@@ -742,7 +762,7 @@ function LessonEditor({
               </div>
             )}
             <label>
-              Подсказка после проверки
+              Пояснение для администратора
               <textarea
                 rows={2}
                 maxLength={2000}
@@ -1527,6 +1547,7 @@ export function UsersPage() {
 export function ReportsPage() {
   const { data, error, refresh } = useResource<any[]>('/api/reports');
   const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<{ user_id: string; course_id: string }>();
   const filtered = data?.filter((r) =>
     `${r.name} ${r.course}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -1540,6 +1561,10 @@ export function ReportsPage() {
         <a className="button primary" href="/api/reports.csv" download>
           <Download size={17} />
           Скачать CSV
+        </a>
+        <a className="button secondary" href="/api/reports/lessons.csv" download>
+          <Download size={17} />
+          По урокам CSV
         </a>
       </PageHeading>
       {data && (
@@ -1599,6 +1624,7 @@ export function ReportsPage() {
                 <th>Прогресс</th>
                 <th>Результат</th>
                 <th>Сертификат</th>
+                <th>Подробности</th>
               </tr>
             </thead>
             <tbody>
@@ -1621,7 +1647,12 @@ export function ReportsPage() {
                       </div>
                     </div>
                   </td>
-                  <td>{r.score !== null ? `${r.score}%` : '—'}</td>
+                  <td>
+                    <strong>{formatPercent(r.score)}</strong>
+                    <small className="table-subtext">
+                      Ответов: {r.submitted} / {r.assessment_total}
+                    </small>
+                  </td>
                   <td>
                     {r.certificate_id ? (
                       <Link className="text-button" to={`/certificates/${r.certificate_id}`}>
@@ -1629,8 +1660,22 @@ export function ReportsPage() {
                         <ExternalLink size={14} />
                       </Link>
                     ) : (
-                      <span className="muted-text">Ещё учится</span>
+                      <span className="muted-text">
+                        {r.total > 0 && r.completed === r.total
+                          ? 'Не выдан'
+                          : 'Проверка не завершена'}
+                      </span>
                     )}
+                  </td>
+                  <td>
+                    <button
+                      className="text-button"
+                      aria-label={`Результаты ${r.name} · ${r.course}`}
+                      onClick={() => setSelected(r)}
+                    >
+                      По урокам
+                      <ArrowRight size={14} />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -1643,6 +1688,103 @@ export function ReportsPage() {
           text="Назначьте ученикам курсы — здесь появится их прогресс."
         />
       )}
+      {selected && (
+        <ReportDetails
+          userId={selected.user_id}
+          courseId={selected.course_id}
+          onClose={() => setSelected(undefined)}
+        />
+      )}
     </>
+  );
+}
+function ReportDetails({
+  userId,
+  courseId,
+  onClose,
+}: {
+  userId: string;
+  courseId: string;
+  onClose: () => void;
+}) {
+  const { data, error, refresh } = useResource<AssessmentResult>(
+    `/api/reports/${userId}/${courseId}`,
+  );
+  return (
+    <Modal title="Результаты ученика" onClose={onClose} wide>
+      {error ? (
+        <ErrorMessage message={error} retry={refresh} />
+      ) : !data ? (
+        <Loading />
+      ) : (
+        <>
+          <div className="report-details-heading">
+            <h3>{data.user?.name}</h3>
+            <p>{data.user?.email}</p>
+            <p>{data.course.title}</p>
+            <span className="pill">
+              {data.complete ? 'Проверка завершена' : 'Проверка в процессе'} · {data.completed} /{' '}
+              {data.total}
+            </span>
+            <strong className="report-average">Средняя оценка: {formatPercent(data.score)}</strong>
+          </div>
+          <div className="table-panel">
+            <table>
+              <thead>
+                <tr>
+                  <th>Урок</th>
+                  <th>Состояние</th>
+                  <th>Результат</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.lessons.map((lesson) => (
+                  <tr key={lesson.id}>
+                    <td>
+                      <strong>{lesson.title}</strong>
+                      {!!lesson.details?.length && (
+                        <details className="question-scores">
+                          <summary>По вопросам</summary>
+                          <ol>
+                            {lesson.details.map((question) => (
+                              <li key={question.id}>
+                                {question.prompt}
+                                <strong>{formatPercent(question.score)}</strong>
+                              </li>
+                            ))}
+                          </ol>
+                        </details>
+                      )}
+                    </td>
+                    <td>
+                      {lesson.type === 'video'
+                        ? lesson.completed_at
+                          ? 'Просмотрен'
+                          : 'Не просмотрен'
+                        : lesson.submitted_at
+                          ? 'Ответ принят'
+                          : 'Нет ответа'}
+                      {lesson.submitted_at && (
+                        <small className="table-subtext">
+                          {new Date(lesson.submitted_at).toLocaleString('ru-RU')}
+                        </small>
+                      )}
+                    </td>
+                    <td>
+                      {lesson.type === 'video' ? '—' : formatPercent(lesson.score)}
+                      {lesson.submitted_at && (
+                        <small className="table-subtext">
+                          {lesson.passed ? 'Порог достигнут' : 'Ниже порога'}
+                        </small>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }

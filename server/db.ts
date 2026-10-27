@@ -81,6 +81,47 @@ export async function migrate() {
       CREATE INDEX IF NOT EXISTS media_queue ON media(status,created_at);
       CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
       CREATE INDEX IF NOT EXISTS attempts_student ON attempts(user_id,lesson_id);
+      CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
     `);
+    const version = 'knowledge-assessment-v1';
+    const applied = await db.query('SELECT 1 FROM schema_migrations WHERE version=$1', [version]);
+    if (!applied.rowCount) {
+      await db.query(`
+        ALTER TABLE progress ADD COLUMN IF NOT EXISTS submitted_at timestamptz;
+        ALTER TABLE progress ADD COLUMN IF NOT EXISTS passed boolean;
+        ALTER TABLE progress ADD COLUMN IF NOT EXISTS attempt_id uuid REFERENCES attempts(id) ON DELETE SET NULL;
+        ALTER TABLE attempts ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '[]';
+      `);
+      for (const table of ['progress', 'attempts']) {
+        const {
+          rows: [column],
+        } = await db.query(
+          `SELECT data_type FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 AND column_name='score'`,
+          [table],
+        );
+        if (column.data_type !== 'double precision')
+          await db.query(`ALTER TABLE ${table} ALTER COLUMN score TYPE double precision`);
+      }
+      // Keep existing recorded grades. Failed-only legacy lessons use their first stored attempt.
+      await db.query(`WITH first_attempt AS (
+        SELECT DISTINCT ON (a.user_id,a.lesson_id) a.*,l.type FROM attempts a JOIN lessons l ON l.id=a.lesson_id
+        WHERE l.type<>'video' ORDER BY a.user_id,a.lesson_id,a.created_at,a.id
+      ) INSERT INTO progress(user_id,lesson_id,completed_at,submitted_at,score,xp,updated_at)
+        SELECT user_id,lesson_id,created_at,created_at,score,CASE WHEN type='quiz' THEN 50 ELSE 75 END,created_at FROM first_attempt
+        ON CONFLICT(user_id,lesson_id) DO UPDATE SET
+          completed_at=COALESCE(progress.completed_at,excluded.completed_at),
+          submitted_at=COALESCE(progress.submitted_at,progress.completed_at,excluded.submitted_at),
+          score=COALESCE(progress.score,excluded.score),
+          xp=CASE WHEN progress.completed_at IS NULL THEN excluded.xp ELSE progress.xp END
+        WHERE progress.submitted_at IS NULL;
+        UPDATE progress p SET
+          submitted_at=COALESCE(p.submitted_at,p.completed_at),
+          attempt_id=COALESCE(p.attempt_id,(SELECT a.id FROM attempts a WHERE a.user_id=p.user_id AND a.lesson_id=p.lesson_id ORDER BY (a.score=p.score) DESC,a.created_at,a.id LIMIT 1)),
+          passed=COALESCE(p.passed,(SELECT a.passed FROM attempts a WHERE a.user_id=p.user_id AND a.lesson_id=p.lesson_id AND a.score=p.score ORDER BY a.created_at,a.id LIMIT 1),p.score>=CASE WHEN l.type='quiz' THEN COALESCE((l.activity->>'passPercent')::float8,80) ELSE 100 END,false)
+        FROM lessons l WHERE l.id=p.lesson_id AND l.type<>'video' AND p.completed_at IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS progress_attempt ON progress(attempt_id);
+      `);
+      await db.query('INSERT INTO schema_migrations(version) VALUES($1)', [version]);
+    }
   });
 }

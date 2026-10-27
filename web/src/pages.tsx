@@ -344,7 +344,12 @@ export function CoursePage() {
               Сертификат прохождения
             </span>
           </div>
-          {data.enrolled && next ? (
+          {data.results_available ? (
+            <Link className="button primary" to={`/courses/${id}/results`}>
+              Посмотреть результаты
+              <ArrowRight size={18} />
+            </Link>
+          ) : data.enrolled && next ? (
             <Link className="button primary" to={`/learn/${id}/${next.id}`}>
               {completed ? 'Продолжить' : 'Начать обучение'}
               <ArrowRight size={18} />
@@ -483,7 +488,7 @@ export function AchievementsPage() {
       ) : (
         <Empty
           title="Первый сертификат впереди"
-          text="Завершите все уроки любого курса — и он появится здесь."
+          text="Завершите курс и достигните проходного порога во всех заданиях."
         >
           <Link className="button primary" to="/courses">
             К обучению

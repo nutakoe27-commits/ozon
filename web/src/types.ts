@@ -12,6 +12,7 @@ export type Course = {
   completed_lessons: number;
   duration_seconds: number;
   lessons?: Lesson[];
+  results_available?: boolean;
 };
 export type Question = {
   id: string;
@@ -22,7 +23,7 @@ export type Question = {
   correctIndexes?: number[];
   explanation?: string;
 };
-export type Zone = { x: number; y: number; width: number; height: number };
+export type Zone = { x: number; y: number; width: number; height: number; score?: 50 | 100 };
 export type Point = { x: number; y: number };
 export type Lesson = {
   id: string;
@@ -44,11 +45,30 @@ export type Lesson = {
   };
   completed_at?: string | null;
   score?: number | null;
+  passed?: boolean | null;
+  submitted_at?: string | null;
   position_seconds?: number;
   watched_seconds?: number;
   video_status?: string;
   video_error?: string;
   duration?: number;
+};
+export type AssessmentResult = {
+  course: { id: string; title: string };
+  user?: { id: string; name: string; email: string };
+  total: number;
+  completed: number;
+  assessment_total: number;
+  submitted: number;
+  score: number | null;
+  complete: boolean;
+  passed: boolean;
+  certificateId?: string | null;
+  lessons: Array<
+    Pick<Lesson, 'id' | 'title' | 'type' | 'score' | 'passed' | 'submitted_at' | 'completed_at'> & {
+      details?: Array<{ id: string; prompt: string; score: number }>;
+    }
+  >;
 };
 export type Media = {
   id: string;

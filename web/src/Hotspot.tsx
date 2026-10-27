@@ -90,7 +90,7 @@ export function HotspotScene({
         zones.map((zone, index) => (
           <div
             key={index}
-            className={`target-zone ${index === activeZone ? 'active' : ''}`}
+            className={`target-zone ${zone.score === 50 ? 'yellow' : 'green'} ${index === activeZone ? 'active' : ''}`}
             data-zone-index={index}
             style={{
               left: `${zone.x}%`,
@@ -99,7 +99,9 @@ export function HotspotScene({
               height: `${zone.height}%`,
             }}
           >
-            <span>Зона {index + 1}</span>
+            <span>
+              Зона {index + 1} · {zone.score ?? 100}%
+            </span>
           </div>
         ))}
       {point && (

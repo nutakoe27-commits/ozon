@@ -24,13 +24,12 @@ import {
 import {
   accessibleCourse,
   accessibleLesson,
-  completeLesson,
-  evaluate,
   hotspotSchema,
   quizSchema,
   safeLesson,
   saveVideoProgress,
 } from './domain.js';
+import { assessmentLessons, assessmentState, submitAssessment } from './assessment.js';
 import { prepareStorage, uploadRoutes, uuid } from './uploads.js';
 
 const credentials = z.object({
@@ -106,6 +105,8 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
     global: options.rateLimit !== false,
     max: 300,
     timeWindow: '1 minute',
+    hook: 'preHandler',
+    keyGenerator: (request) => (request.user ? `user:${request.user.id}` : `ip:${request.ip}`),
   });
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0 } });
   const clientRoot = path.resolve('dist/client');
@@ -171,7 +172,11 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
   }));
   app.post(
     '/api/auth/login',
-    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    {
+      config: {
+        rateLimit: { max: 10, timeWindow: '1 minute', keyGenerator: (request) => request.ip },
+      },
+    },
     async (request, reply) => {
       const body = credentials.parse(request.body);
       const [user] = await sql('SELECT * FROM users WHERE email=$1', [body.email]);
@@ -182,7 +187,11 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
   );
   app.post(
     '/api/auth/register',
-    { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } },
+    {
+      config: {
+        rateLimit: { max: 5, timeWindow: '1 hour', keyGenerator: (request) => request.ip },
+      },
+    },
     async (request, reply) => {
       if (config.REGISTRATION_OPEN !== 'true')
         throw new HttpError(403, 'Самостоятельная регистрация отключена');
@@ -277,10 +286,34 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
     const course = await accessibleCourse(user, id, false);
     if (user.role !== 'admin' && !course.enrolled) return { ...course, lessons: [] };
     const lessons = await sql(
-      `SELECT l.*,m.status AS video_status,m.duration,m.error AS video_error,p.completed_at,p.score,p.position_seconds,p.watched_seconds FROM lessons l LEFT JOIN media m ON m.id=l.video_id LEFT JOIN progress p ON p.lesson_id=l.id AND p.user_id=$2 WHERE l.course_id=$1 ORDER BY l.position,l.created_at`,
+      `SELECT l.*,m.status AS video_status,m.duration,m.error AS video_error,p.completed_at,p.submitted_at,p.score,p.passed,p.position_seconds,p.watched_seconds FROM lessons l LEFT JOIN media m ON m.id=l.video_id LEFT JOIN progress p ON p.lesson_id=l.id AND p.user_id=$2 WHERE l.course_id=$1 ORDER BY l.position,l.created_at`,
       [id, user.id],
     );
-    return { ...course, lessons: lessons.map((l) => safeLesson(l, user.role === 'admin')) };
+    const state = await assessmentState(user.id, id);
+    return {
+      ...course,
+      results_available: state.complete,
+      lessons: lessons.map((l) => safeLesson(l, user.role === 'admin', state.complete)),
+    };
+  });
+  app.get('/api/courses/:id/results', async (request) => {
+    const user = requireUser(request);
+    const { id } = request.params as any;
+    const course = await accessibleCourse(user, id);
+    const state = await assessmentState(user.id, id);
+    if (!state.complete)
+      throw new HttpError(409, 'Результаты откроются после завершения всех уроков курса');
+    const lessons = await assessmentLessons(user.id, id);
+    const [certificate] = await sql(
+      'SELECT id FROM certificates WHERE course_id=$1 AND user_id=$2',
+      [id, user.id],
+    );
+    return {
+      course: { id: course.id, title: course.title },
+      ...state,
+      lessons,
+      certificateId: certificate?.id ?? null,
+    };
   });
   app.post('/api/courses', async (request, reply) => {
     const user = requireAdmin(request);
@@ -486,15 +519,7 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
       const { id } = request.params as any;
       const lesson = await accessibleLesson(user, id);
       const { response } = z.object({ response: z.unknown() }).parse(request.body);
-      const result = evaluate(lesson.type, lesson.activity, response);
-      await sql(
-        'INSERT INTO attempts(id,user_id,lesson_id,score,passed,response) VALUES($1,$2,$3,$4,$5,$6)',
-        [randomUUID(), user.id, id, result.score, result.passed, JSON.stringify(response)],
-      );
-      const certificateId = result.passed
-        ? await completeLesson(user.id, lesson, result.score)
-        : null;
-      return { ...result, certificateId };
+      return submitAssessment(user, lesson, response);
     },
   );
   app.post('/api/lessons/:id/progress', async (request) => {
@@ -511,7 +536,14 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
         rate: z.number().min(0.5).max(2).default(1),
       })
       .parse(request.body);
-    return saveVideoProgress(user.id, lesson, position, rate);
+    const saved = await saveVideoProgress(user.id, lesson, position, rate);
+    const state = await assessmentState(user.id, lesson.course_id);
+    return {
+      position_seconds: saved.position_seconds,
+      watched_seconds: saved.watched_seconds,
+      completed_at: saved.completed_at,
+      resultsAvailable: state.complete,
+    };
   });
   app.get('/api/users', async (request) => {
     requireAdmin(request);
@@ -554,15 +586,70 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
     return { ok: true };
   });
   const report = () =>
-    sql(`SELECT u.name,u.email,u.active,c.title AS course,c.id AS course_id,e.created_at AS assigned_at,
+    sql(`SELECT u.id AS user_id,u.name,u.email,u.active,c.title AS course,c.id AS course_id,e.created_at AS assigned_at,
     (SELECT count(*)::int FROM lessons l WHERE l.course_id=c.id) AS total,
     (SELECT count(*)::int FROM lessons l JOIN progress p ON p.lesson_id=l.id WHERE l.course_id=c.id AND p.user_id=u.id AND p.completed_at IS NOT NULL) AS completed,
-    (SELECT round(avg(p.score))::int FROM lessons l JOIN progress p ON p.lesson_id=l.id WHERE l.course_id=c.id AND p.user_id=u.id AND p.score IS NOT NULL) AS score,
+    (SELECT round(avg(p.score)::numeric,2)::float8 FROM lessons l JOIN progress p ON p.lesson_id=l.id WHERE l.course_id=c.id AND p.user_id=u.id AND l.type<>'video' AND p.submitted_at IS NOT NULL) AS score,
+    (SELECT count(*)::int FROM lessons l WHERE l.course_id=c.id AND l.type<>'video') AS assessment_total,
+    (SELECT count(*)::int FROM lessons l JOIN progress p ON p.lesson_id=l.id WHERE l.course_id=c.id AND p.user_id=u.id AND p.submitted_at IS NOT NULL) AS submitted,
     cert.id AS certificate_id,cert.issued_at
     FROM enrollments e JOIN users u ON u.id=e.user_id JOIN courses c ON c.id=e.course_id LEFT JOIN certificates cert ON cert.course_id=c.id AND cert.user_id=u.id ORDER BY u.name,c.title`);
   app.get('/api/reports', async (request) => {
     requireAdmin(request);
     return report();
+  });
+  app.get('/api/reports/:userId/:courseId', async (request) => {
+    requireAdmin(request);
+    const { userId, courseId } = request.params as any;
+    const [user] = await sql('SELECT id,name,email FROM users WHERE id=$1', [userId]);
+    const [course] = await sql('SELECT id,title FROM courses WHERE id=$1', [courseId]);
+    if (!user || !course) throw new HttpError(404, 'Результаты не найдены');
+    return {
+      user,
+      course,
+      ...(await assessmentState(userId, courseId)),
+      lessons: await assessmentLessons(userId, courseId, true),
+    };
+  });
+  app.get('/api/reports/lessons.csv', async (request, reply) => {
+    requireAdmin(request);
+    const rows = await sql(
+      `SELECT u.name,u.email,c.title AS course,l.title AS lesson,l.type,p.submitted_at,p.completed_at,p.score,p.passed FROM enrollments e JOIN users u ON u.id=e.user_id JOIN courses c ON c.id=e.course_id JOIN lessons l ON l.course_id=c.id LEFT JOIN progress p ON p.lesson_id=l.id AND p.user_id=u.id ORDER BY u.name,c.title,l.position,l.created_at`,
+    );
+    const cell = (value: unknown) =>
+      '"' +
+      String(value ?? '')
+        .replace(/^[=+@\-\t\r]/, (m) => "'" + m)
+        .replaceAll('"', '""') +
+      '"';
+    const data = [
+      [
+        'Имя',
+        'Почта',
+        'Курс',
+        'Урок',
+        'Тип',
+        'Состояние',
+        'Результат, %',
+        'Порог достигнут',
+        'Отправлен',
+      ],
+      ...rows.map((r) => [
+        r.name,
+        r.email,
+        r.course,
+        r.lesson,
+        r.type,
+        r.completed_at ? 'Завершён' : 'Не завершён',
+        r.type === 'video' ? '' : r.score,
+        r.passed === null ? '' : r.passed ? 'Да' : 'Нет',
+        r.submitted_at?.toISOString() ?? '',
+      ]),
+    ];
+    return reply
+      .type('text/csv; charset=utf-8')
+      .header('Content-Disposition', 'attachment; filename="praktika-lesson-results.csv"')
+      .send('\uFEFF' + data.map((row) => row.map(cell).join(';')).join('\r\n'));
   });
   app.get('/api/reports.csv', async (request, reply) => {
     requireAdmin(request);

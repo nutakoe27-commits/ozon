@@ -32,6 +32,7 @@ import type { User } from './types';
 import { ErrorMessage, Loading, Logo, Modal, Notices, PageHeading, useNotice } from './ui';
 import { DashboardPage, CoursesPage, CoursePage, AchievementsPage, CertificatePage } from './pages';
 import { LessonPage } from './learning';
+import { CourseResultsPage } from './results';
 import { AdminCoursesPage, CourseEditor, UsersPage, ReportsPage, MediaPage } from './admin';
 const Auth = createContext<{ user: User; logout: () => Promise<void> }>(null!);
 export const useAuth = () => useContext(Auth);
@@ -387,12 +388,12 @@ function HelpPage() {
           [
             '03',
             'Закрепляйте знания',
-            'Ответьте на вопросы или переместите персонажа в безопасное место. За пройденные уроки вы получаете баллы. Попытки можно повторять.',
+            'Ответьте на все вопросы или переместите персонажа в выбранное место. На задание даётся одна отправка. Оценки откроются после завершения всего курса; правильные ответы не показываются.',
           ],
           [
             '04',
             'Отмечайте результат',
-            'После всех уроков курса в «Достижениях» появится сертификат прохождения. Его можно распечатать или сохранить в PDF.',
+            'После всех уроков откроются результаты по каждому заданию. При достижении проходного порога во всех заданиях в «Достижениях» появится сертификат; его можно сохранить в PDF.',
           ],
         ].map(([n, t, p]) => (
           <div className="panel help-card" key={n}>
@@ -451,6 +452,7 @@ export default function App() {
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/courses" element={<CoursesPage />} />
                 <Route path="/courses/:id" element={<CoursePage />} />
+                <Route path="/courses/:id/results" element={<CourseResultsPage />} />
                 <Route path="/learn/:courseId/:lessonId" element={<LessonPage />} />
                 <Route path="/achievements" element={<AchievementsPage />} />
                 <Route path="/certificates/:id" element={<CertificatePage />} />
