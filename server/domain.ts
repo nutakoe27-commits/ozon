@@ -12,7 +12,16 @@ export const quizSchema = z
           id: z.string().min(1).max(80),
           prompt: z.string().trim().min(3).max(2000),
           options: z.array(z.string().trim().min(1).max(500)).min(2).max(8),
-          correctIndex: z.number().int().min(0).max(7),
+          multiple: z.boolean().default(false),
+          correctIndex: z.number().int().min(0).max(7).optional(),
+          correctIndexes: z
+            .array(z.number().int().min(0).max(7))
+            .min(1, 'Отметьте хотя бы один правильный ответ')
+            .max(8)
+            .refine((indexes) => new Set(indexes).size === indexes.length, {
+              message: 'Правильные ответы не должны повторяться',
+            })
+            .optional(),
           explanation: z.string().max(2000).default(''),
         }),
       )
@@ -22,11 +31,22 @@ export const quizSchema = z
   .superRefine((quiz, ctx) => {
     const ids = new Set<string>();
     quiz.questions.forEach((q, i) => {
-      if (q.correctIndex >= q.options.length)
+      const correct = q.multiple
+        ? q.correctIndexes
+        : q.correctIndex === undefined
+          ? undefined
+          : [q.correctIndex];
+      if (!correct?.length)
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Отметьте хотя бы один правильный ответ',
+          path: ['questions', i, q.multiple ? 'correctIndexes' : 'correctIndex'],
+        });
+      if (correct?.some((index) => index >= q.options.length))
         ctx.addIssue({
           code: 'custom',
           message: 'Выберите существующий ответ',
-          path: ['questions', i, 'correctIndex'],
+          path: ['questions', i, q.multiple ? 'correctIndexes' : 'correctIndex'],
         });
       if (ids.has(q.id))
         ctx.addIssue({
@@ -71,7 +91,10 @@ export function safeLesson(lesson: Record<string, any>, admin: boolean) {
       ? {
           passPercent: lesson.activity.passPercent,
           questions: (lesson.activity.questions || []).map(
-            ({ correctIndex, explanation, ...q }: Record<string, any>) => q,
+            ({ correctIndex, correctIndexes, explanation, ...q }: Record<string, any>) => ({
+              ...q,
+              multiple: q.multiple ?? false,
+            }),
           ),
         }
       : lesson.type === 'hotspot'
@@ -86,12 +109,26 @@ export function safeLesson(lesson: Record<string, any>, admin: boolean) {
 export function evaluate(type: string, activity: any, response: unknown) {
   if (type === 'quiz') {
     const quiz = quizSchema.parse(activity);
-    const answers = z.record(z.string(), z.number().int().min(0).max(7)).parse(response);
-    const feedback = quiz.questions.map((q) => ({
-      id: q.id,
-      correct: answers[q.id] === q.correctIndex,
-      explanation: q.explanation,
-    }));
+    const index = z.number().int().min(0).max(7);
+    const selection = z
+      .array(index)
+      .max(8)
+      .refine((values) => new Set(values).size === values.length, {
+        message: 'Варианты ответа не должны повторяться',
+      });
+    const answers = z.record(z.string(), z.union([index, selection])).parse(response);
+    const feedback = quiz.questions.map((q) => {
+      const given = answers[q.id];
+      return {
+        id: q.id,
+        correct: q.multiple
+          ? Array.isArray(given) &&
+            given.length === q.correctIndexes!.length &&
+            q.correctIndexes!.every((value) => given.includes(value))
+          : typeof given === 'number' && given === q.correctIndex,
+        explanation: q.explanation,
+      };
+    });
     const score = Math.round(
       (feedback.filter((q) => q.correct).length / quiz.questions.length) * 100,
     );

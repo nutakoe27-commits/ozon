@@ -162,6 +162,7 @@ function newLesson(type: Lesson['type'], position: number): Lesson {
                 id: crypto.randomUUID(),
                 prompt: '',
                 options: ['', ''],
+                multiple: false,
                 correctIndex: 0,
                 explanation: '',
               },
@@ -429,15 +430,62 @@ function LessonEditor({
                     onChange={(e) => question(index, { prompt: e.target.value })}
                   />
                 </label>
-                <small className="muted-text">Отметьте правильный вариант кружком слева.</small>
+                <label>
+                  Тип ответа
+                  <select
+                    aria-label={`Тип ответа вопроса ${index + 1}`}
+                    value={q.multiple ? 'multiple' : 'single'}
+                    onChange={(e) =>
+                      question(
+                        index,
+                        e.target.value === 'multiple'
+                          ? {
+                              multiple: true,
+                              correctIndexes: q.correctIndexes ?? [q.correctIndex ?? 0],
+                              correctIndex: undefined,
+                            }
+                          : {
+                              multiple: false,
+                              correctIndex: q.correctIndexes?.[0] ?? q.correctIndex ?? 0,
+                              correctIndexes: undefined,
+                            },
+                      )
+                    }
+                  >
+                    <option value="single">Один правильный ответ</option>
+                    <option value="multiple">Несколько правильных ответов</option>
+                  </select>
+                </label>
+                <small className="muted-text">
+                  {q.multiple
+                    ? 'Отметьте галочками все правильные варианты. Для зачёта ученик должен выбрать их все без лишних ответов.'
+                    : 'Отметьте правильный вариант кружком слева.'}
+                </small>
                 {q.options.map((option, optionIndex) => (
                   <div className="option-editor" key={optionIndex}>
                     <input
-                      type="radio"
+                      type={q.multiple ? 'checkbox' : 'radio'}
                       aria-label={`Правильный ответ ${optionIndex + 1} на вопрос ${index + 1}`}
                       name={`correct-${q.id}`}
-                      checked={q.correctIndex === optionIndex}
-                      onChange={() => question(index, { correctIndex: optionIndex })}
+                      checked={
+                        q.multiple
+                          ? (q.correctIndexes || []).includes(optionIndex)
+                          : q.correctIndex === optionIndex
+                      }
+                      onChange={(e) =>
+                        question(
+                          index,
+                          q.multiple
+                            ? {
+                                correctIndexes: e.target.checked
+                                  ? [...(q.correctIndexes || []), optionIndex]
+                                  : (q.correctIndexes || []).filter(
+                                      (value) => value !== optionIndex,
+                                    ),
+                              }
+                            : { correctIndex: optionIndex },
+                        )
+                      }
                     />
                     <input
                       required
@@ -467,6 +515,14 @@ function LessonEditor({
                                 : (q.correctIndex || 0) > optionIndex
                                   ? (q.correctIndex || 0) - 1
                                   : q.correctIndex,
+                            ...(q.multiple
+                              ? {
+                                  correctIndex: undefined,
+                                  correctIndexes: (q.correctIndexes || [])
+                                    .filter((value) => value !== optionIndex)
+                                    .map((value) => (value > optionIndex ? value - 1 : value)),
+                                }
+                              : {}),
                           })
                         }
                       >
@@ -508,6 +564,7 @@ function LessonEditor({
                       id: crypto.randomUUID(),
                       prompt: '',
                       options: ['', ''],
+                      multiple: false,
                       correctIndex: 0,
                       explanation: '',
                     },

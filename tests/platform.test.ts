@@ -16,7 +16,7 @@ const { migrate, pool, sql } = await import('../server/db.js');
 const { hashPassword } = await import('../server/auth.js');
 const { processNext, command } = await import('../server/worker.js');
 const { uploadPath, mediaPath } = await import('../server/uploads.js');
-const { evaluate, hotspotSchema, safeLesson } = await import('../server/domain.js');
+const { evaluate, hotspotSchema, quizSchema, safeLesson } = await import('../server/domain.js');
 let app: Awaited<ReturnType<typeof buildApp>>;
 let admin: Record<string, string>,
   student: Record<string, string>,
@@ -839,4 +839,141 @@ test('quiz video and photo stay private, watching does not pass the test or over
     (await request('PATCH', `/api/courses/${draft.id}`, admin, { published: true })).statusCode,
     400,
   );
+});
+test('multiple-answer grading requires the exact set and supports mixed and legacy questions', () => {
+  const activity = {
+    passPercent: 100,
+    questions: [
+      {
+        id: 'multi',
+        prompt: 'Выберите безопасные действия',
+        multiple: true,
+        options: ['Проверить оборудование', 'Игнорировать риск', 'Надеть средства защиты'],
+        correctIndexes: [0, 2],
+      },
+      {
+        id: 'single',
+        prompt: 'Кому сообщить об опасности?',
+        options: ['Никому', 'Руководителю'],
+        correctIndex: 1,
+      },
+    ],
+  };
+  assert.equal(evaluate('quiz', activity, { multi: [2, 0], single: 1 }).score, 100);
+  for (const selected of [[0], [2], [0, 1, 2], [1], [], 0]) {
+    const result = evaluate('quiz', activity, { multi: selected, single: 1 });
+    assert.equal(result.passed, false);
+    assert.equal(result.score, 50);
+    assert.equal(result.feedback?.[0].correct, false);
+  }
+  assert.equal(evaluate('quiz', activity, { multi: [0, 2], single: 0 }).score, 50);
+  assert.equal(evaluate('quiz', activity, { multi: [0, 2], single: [1] }).passed, false);
+  assert.throws(() => evaluate('quiz', activity, { multi: [0, 0, 2], single: 1 }));
+  assert.throws(() => evaluate('quiz', activity, { multi: [0, 8], single: 1 }));
+  assert.equal(evaluate('quiz', quiz, { q1: 1 }).passed, true);
+});
+test('quiz constructor validates multiple correct answers and keeps all answer keys private', () => {
+  const question = {
+    id: 'multi',
+    prompt: 'Выберите безопасные действия',
+    multiple: true,
+    options: ['Проверить оборудование', 'Игнорировать риск', 'Надеть средства защиты'],
+    correctIndexes: [0, 2],
+    explanation: 'Проверяйте рабочее место и средства защиты.',
+  };
+  assert.equal(quizSchema.safeParse({ questions: [question] }).success, true);
+  for (const indexes of [undefined, [], [0, 0], [0, 3]])
+    assert.equal(
+      quizSchema.safeParse({ questions: [{ ...question, correctIndexes: indexes }] }).success,
+      false,
+    );
+  assert.equal(
+    quizSchema.safeParse({
+      questions: [{ ...question, multiple: false, correctIndexes: undefined }],
+    }).success,
+    false,
+  );
+  const visible = safeLesson(
+    { type: 'quiz', activity: { passPercent: 80, questions: [{ ...question, correctIndex: 0 }] } },
+    false,
+  ).activity.questions[0];
+  assert.equal(visible.multiple, true);
+  assert.equal(visible.correctIndex, undefined);
+  assert.equal(visible.correctIndexes, undefined);
+  assert.equal(visible.explanation, undefined);
+});
+test('multiple-answer courses persist configuration, reject partial and extra choices, and award XP once', async () => {
+  const course = (
+    await request('POST', '/api/courses', admin, {
+      title: 'Тест с несколькими правильными ответами',
+    })
+  ).json();
+  const activity = {
+    passPercent: 100,
+    questions: [
+      {
+        id: 'multi',
+        prompt: 'Выберите безопасные действия',
+        multiple: true,
+        options: ['Проверить оборудование', 'Игнорировать риск', 'Надеть средства защиты'],
+        correctIndexes: [0, 2],
+      },
+      {
+        id: 'single',
+        prompt: 'Кому сообщить об опасности?',
+        options: ['Никому', 'Руководителю'],
+        correctIndex: 1,
+      },
+    ],
+  };
+  const invalid = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+    title: 'Некорректное задание',
+    type: 'quiz',
+    activity: { ...activity, questions: [{ ...activity.questions[0], correctIndexes: [3] }] },
+  });
+  assert.equal(invalid.statusCode, 400, invalid.body);
+  const created = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+    title: 'Безопасные действия',
+    type: 'quiz',
+    activity,
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const id = created.json().id;
+  assert.deepEqual(created.json().activity.questions[0].correctIndexes, [0, 2]);
+  await request('PATCH', `/api/courses/${course.id}`, admin, { published: true });
+  await request('POST', `/api/courses/${course.id}/enrollments`, admin, { userIds: [studentId] });
+  const before = (await request('GET', '/api/dashboard', student)).json().xp;
+  const view = (await request('GET', `/api/courses/${course.id}`, student)).json().lessons[0]
+    .activity.questions;
+  assert.equal(view[0].multiple, true);
+  assert.equal(view[1].multiple, false);
+  assert.equal(view[0].correctIndexes, undefined);
+  assert.equal(view[1].correctIndex, undefined);
+  for (const selected of [[0], [0, 1, 2]]) {
+    const attempt = await request('POST', `/api/lessons/${id}/attempt`, student, {
+      response: { multi: selected, single: 1 },
+    });
+    assert.equal(attempt.statusCode, 200, attempt.body);
+    assert.equal(attempt.json().score, 50);
+    assert.equal(attempt.json().passed, false);
+    assert.equal(attempt.json().certificateId, null);
+  }
+  assert.equal(
+    (
+      await request('POST', `/api/lessons/${id}/attempt`, student, {
+        response: { multi: [0, 0, 2], single: 1 },
+      })
+    ).statusCode,
+    400,
+  );
+  const success = await request('POST', `/api/lessons/${id}/attempt`, student, {
+    response: { multi: [2, 0], single: 1 },
+  });
+  assert.equal(success.json().score, 100);
+  assert.ok(success.json().certificateId);
+  const repeated = await request('POST', `/api/lessons/${id}/attempt`, student, {
+    response: { multi: [0, 2], single: 1 },
+  });
+  assert.equal(repeated.json().certificateId, success.json().certificateId);
+  assert.equal((await request('GET', '/api/dashboard', student)).json().xp, before + 50);
 });

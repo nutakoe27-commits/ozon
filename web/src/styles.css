@@ -2138,6 +2138,27 @@ form > .button.full {
   background: #fff;
   flex-shrink: 0;
 }
+.question-hint {
+  font-size: 11px;
+  color: #758568;
+  margin: -6px 0 14px;
+}
+.answer-checkbox {
+  width: 17px;
+  height: 17px;
+  border: 1.5px solid #a5b78d;
+  border-radius: 4px;
+  background: #fff;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.answer-option.selected .answer-checkbox {
+  background: #789654;
+  border-color: #789654;
+  color: #fff;
+}
 .answer-option.selected .answer-radio {
   border: 4px solid #9ab76b;
   background: #fff;

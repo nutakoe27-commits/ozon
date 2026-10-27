@@ -21,7 +21,7 @@ import { Empty, ErrorMessage, Loading, useNotice } from './ui';
 import { VideoPlayer } from './VideoPlayer';
 import { HotspotScene } from './Hotspot';
 function Quiz({ lesson, onPassed }: { lesson: Lesson; onPassed: (id: string | null) => void }) {
-  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [answers, setAnswers] = useState<Record<string, number | number[]>>({});
   const [result, setResult] = useState<any>();
   const [busy, setBusy] = useState(false);
   const notice = useNotice();
@@ -63,23 +63,46 @@ function Quiz({ lesson, onPassed }: { lesson: Lesson; onPassed: (id: string | nu
             <span>{String(i + 1).padStart(2, '0')}</span>
             {q.prompt}
           </legend>
-          {q.options.map((option, index) => (
-            <label
-              key={index}
-              className={`answer-option ${answers[q.id] === index ? 'selected' : ''}`}
-            >
-              <input
-                type="radio"
-                name={q.id}
-                value={index}
-                checked={answers[q.id] === index}
-                disabled={!!result}
-                onChange={() => setAnswers((a) => ({ ...a, [q.id]: index }))}
-              />
-              <span className="answer-radio" />
-              <span>{option}</span>
-            </label>
-          ))}
+          <p className="question-hint">
+            {q.multiple
+              ? 'Выберите все правильные варианты. Лишние ответы не допускаются.'
+              : 'Выберите один правильный вариант.'}
+          </p>
+          {q.options.map((option, index) => {
+            const answer = answers[q.id];
+            const selected = q.multiple
+              ? Array.isArray(answer) && answer.includes(index)
+              : answer === index;
+            return (
+              <label key={index} className={`answer-option ${selected ? 'selected' : ''}`}>
+                <input
+                  type={q.multiple ? 'checkbox' : 'radio'}
+                  name={q.id}
+                  value={index}
+                  checked={selected}
+                  disabled={!!result}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    setAnswers((previous) => {
+                      if (!q.multiple) return { ...previous, [q.id]: index };
+                      const current = previous[q.id];
+                      const values = Array.isArray(current) ? current : [];
+                      return {
+                        ...previous,
+                        [q.id]: checked
+                          ? [...values, index]
+                          : values.filter((value) => value !== index),
+                      };
+                    });
+                  }}
+                />
+                <span className={q.multiple ? 'answer-checkbox' : 'answer-radio'}>
+                  {q.multiple && selected && <Check size={12} strokeWidth={3} />}
+                </span>
+                <span>{option}</span>
+              </label>
+            );
+          })}
           {result && (
             <p className="question-feedback">
               {result.feedback.find((f: any) => f.id === q.id)?.correct
@@ -118,7 +141,16 @@ function Quiz({ lesson, onPassed }: { lesson: Lesson; onPassed: (id: string | nu
       ) : (
         <button
           className="button primary"
-          disabled={busy || Object.keys(answers).length !== questions.length}
+          disabled={
+            busy ||
+            questions.length === 0 ||
+            questions.some((q) => {
+              const answer = answers[q.id];
+              return q.multiple
+                ? !Array.isArray(answer) || answer.length === 0
+                : typeof answer !== 'number';
+            })
+          }
           onClick={() => void submit()}
         >
           {busy ? 'Проверяем…' : 'Проверить ответы'}

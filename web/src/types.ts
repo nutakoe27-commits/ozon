@@ -17,7 +17,9 @@ export type Question = {
   id: string;
   prompt: string;
   options: string[];
+  multiple?: boolean;
   correctIndex?: number;
+  correctIndexes?: number[];
   explanation?: string;
 };
 export type Zone = { x: number; y: number; width: number; height: number };

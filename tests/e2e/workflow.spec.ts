@@ -424,8 +424,10 @@ test('quiz constructor adds video and photo above questions, with completion ear
     await dialog.locator('.upload-widget input[type=file]').setInputFiles(source);
     await dialog.getByRole('button', { name: 'Загрузить', exact: true }).click();
     await expect(
-      dialog.getByRole('combobox', { name: 'Видео из медиатеки', exact: true }),
-    ).toContainText('quiz-introduction.mp4 · Готово', { timeout: 20000 });
+      dialog
+        .getByRole('combobox', { name: 'Видео из медиатеки', exact: true })
+        .locator('option:checked'),
+    ).toHaveText('quiz-introduction.mp4 · Готово', { timeout: 20000 });
     await dialog.getByRole('button', { name: 'Сохранить урок', exact: true }).click();
     await page.getByRole('button', { name: 'Опубликовать', exact: true }).click();
     await expect(
@@ -460,6 +462,139 @@ test('quiz constructor adds video and photo above questions, with completion ear
   } finally {
     await learner?.close();
     await rm(directory, { recursive: true, force: true });
+    await adminApi(page, `/api/courses/${course.id}`, { confirm: true }, 'DELETE');
+  }
+});
+test('mixed quizzes support checkbox answers, preserve correct choices on edits and require exact selection', async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  await login(page);
+  const course = await adminApi(page, '/api/courses', { title: `Множественный выбор ${stamp}` });
+  let learner: Page | undefined;
+  try {
+    await page.goto(`/admin/courses/${course.id}`);
+    await page.getByRole('button', { name: 'Тест Вопросы с выбором правильного ответа' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Новый урок' });
+    await dialog
+      .getByLabel('Название урока', { exact: true })
+      .fill('Безопасные действия и ответственность');
+    await dialog.getByLabel('Проходной результат, %', { exact: true }).fill('100');
+    await dialog
+      .getByLabel('Текст вопроса', { exact: true })
+      .fill('Какие действия помогают работать безопасно?');
+    await dialog
+      .getByRole('combobox', { name: 'Тип ответа вопроса 1', exact: true })
+      .selectOption('multiple');
+    await dialog.getByRole('button', { name: 'Добавить вариант', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Добавить вариант', exact: true }).click();
+    for (const [index, text] of [
+      'Проверить оборудование',
+      'Временный вариант',
+      'Игнорировать неисправность',
+      'Надеть средства защиты',
+    ].entries()) {
+      await dialog
+        .getByRole('textbox', { name: `Вариант ${index + 1} вопроса 1`, exact: true })
+        .fill(text);
+    }
+    await dialog
+      .getByRole('checkbox', { name: 'Правильный ответ 4 на вопрос 1', exact: true })
+      .check();
+    await dialog
+      .locator('.option-editor')
+      .nth(1)
+      .getByRole('button', { name: 'Удалить вариант', exact: true })
+      .click();
+    await expect(
+      dialog.getByRole('checkbox', { name: 'Правильный ответ 1 на вопрос 1', exact: true }),
+    ).toBeChecked();
+    await expect(
+      dialog.getByRole('checkbox', { name: 'Правильный ответ 2 на вопрос 1', exact: true }),
+    ).not.toBeChecked();
+    await expect(
+      dialog.getByRole('checkbox', { name: 'Правильный ответ 3 на вопрос 1', exact: true }),
+    ).toBeChecked();
+    await dialog.getByRole('button', { name: 'Добавить вопрос', exact: true }).click();
+    await dialog
+      .locator('.question-editor')
+      .nth(1)
+      .getByLabel('Текст вопроса', { exact: true })
+      .fill('Кому нужно сообщить об опасности?');
+    await dialog
+      .getByRole('textbox', { name: 'Вариант 1 вопроса 2', exact: true })
+      .fill('Руководителю');
+    await dialog.getByRole('textbox', { name: 'Вариант 2 вопроса 2', exact: true }).fill('Никому');
+    await dialog.getByRole('button', { name: 'Сохранить урок', exact: true }).click();
+    await page.getByRole('button', { name: 'Опубликовать', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Снять с публикации', exact: true }),
+    ).toBeVisible();
+    await page.reload();
+    await page
+      .getByRole('button', {
+        name: 'Редактировать Безопасные действия и ответственность',
+        exact: true,
+      })
+      .click();
+    const edit = page.getByRole('dialog', { name: 'Редактировать урок' });
+    await expect(
+      edit.getByRole('combobox', { name: 'Тип ответа вопроса 1', exact: true }),
+    ).toHaveValue('multiple');
+    await expect(
+      edit.getByRole('checkbox', { name: 'Правильный ответ 3 на вопрос 1', exact: true }),
+    ).toBeChecked();
+    await expect(
+      edit.getByRole('combobox', { name: 'Тип ответа вопроса 2', exact: true }),
+    ).toHaveValue('single');
+    await edit.getByRole('button', { name: 'Закрыть', exact: true }).click();
+    learner = await browser.newPage({ baseURL });
+    await login(learner, 'student@praktika.test', 'DemoStudent2026!');
+    await learner.goto(`/courses/${course.id}`);
+    await learner.getByRole('button', { name: 'Записаться на курс', exact: true }).click();
+    await expect(learner.getByRole('checkbox')).toHaveCount(3);
+    await expect(learner.getByRole('radio')).toHaveCount(2);
+    const submit = learner.getByRole('button', { name: 'Проверить ответы', exact: true });
+    await expect(submit).toBeDisabled();
+    await learner.getByText('Проверить оборудование', { exact: true }).click();
+    await learner.getByText('Руководителю', { exact: true }).click();
+    await submit.click();
+    await expect(
+      learner.getByRole('heading', { name: 'Попробуйте ещё раз', exact: true }),
+    ).toBeVisible();
+    await learner.getByRole('button', { name: 'Повторить', exact: true }).click();
+    await learner.getByText('Руководителю', { exact: true }).click();
+    await learner.getByText('Проверить оборудование', { exact: true }).click();
+    await learner.getByText('Проверить оборудование', { exact: true }).click();
+    await expect(submit).toBeDisabled();
+    for (const choice of [
+      'Проверить оборудование',
+      'Игнорировать неисправность',
+      'Надеть средства защиты',
+    ])
+      await learner.getByText(choice, { exact: true }).click();
+    await submit.click();
+    await expect(
+      learner.getByRole('heading', { name: 'Попробуйте ещё раз', exact: true }),
+    ).toBeVisible();
+    await learner.getByRole('button', { name: 'Повторить', exact: true }).click();
+    await learner.getByText('Руководителю', { exact: true }).click();
+    await learner.getByText('Проверить оборудование', { exact: true }).click();
+    const last = learner.getByRole('checkbox', { name: 'Надеть средства защиты', exact: true });
+    await last.focus();
+    await learner.keyboard.press('Space');
+    await expect(last).toBeChecked();
+    await submit.click();
+    await expect(
+      learner.getByRole('heading', { name: 'Отличная работа!', exact: true }),
+    ).toBeVisible();
+    await expect(
+      learner.getByRole('link', { name: 'Получить сертификат', exact: true }),
+    ).toBeVisible();
+    await learner.screenshot({ path: 'test-results/multiple-answer-quiz.png', fullPage: true });
+  } finally {
+    await learner?.close();
     await adminApi(page, `/api/courses/${course.id}`, { confirm: true }, 'DELETE');
   }
 });
