@@ -118,6 +118,7 @@ export function VideoUpload({ onComplete }: { onComplete?: (id: string) => void 
       />
       {!file ? (
         <button
+          type="button"
           className="upload-dropzone"
           disabled={!limits}
           onClick={() => input.current?.click()}
@@ -152,6 +153,7 @@ export function VideoUpload({ onComplete }: { onComplete?: (id: string) => void 
           </div>
           {state === 'uploading' ? (
             <button
+              type="button"
               className="icon-button"
               onClick={() => abort.current?.abort()}
               aria-label="Приостановить загрузку"
@@ -161,13 +163,14 @@ export function VideoUpload({ onComplete }: { onComplete?: (id: string) => void 
           ) : state === 'done' ? (
             <CheckCircle2 className="green-text" />
           ) : (
-            <button className="button primary small" onClick={() => void upload()}>
+            <button type="button" className="button primary small" onClick={() => void upload()}>
               {state === 'paused' ? <Play size={15} /> : <UploadCloud size={15} />}{' '}
               {state === 'paused' ? 'Продолжить' : 'Загрузить'}
             </button>
           )}
           {state !== 'uploading' && (
             <button
+              type="button"
               className="icon-button"
               aria-label="Выбрать другой файл"
               onClick={() => {

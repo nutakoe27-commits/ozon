@@ -37,20 +37,33 @@ export const quizSchema = z
       ids.add(q.id);
     });
   });
+const pointSchema = z.object({ x: coordinate, y: coordinate });
+const zoneSchema = z
+  .object({
+    x: coordinate,
+    y: coordinate,
+    width: z.number().min(3).max(100),
+    height: z.number().min(3).max(100),
+  })
+  .refine((zone) => zone.x + zone.width <= 100 && zone.y + zone.height <= 100, {
+    message: 'Безопасная зона должна находиться внутри сцены',
+  });
 export const hotspotSchema = z
   .object({
     instruction: z.string().trim().min(3).max(2000),
-    target: z.object({
-      x: coordinate,
-      y: coordinate,
-      width: z.number().min(3).max(100),
-      height: z.number().min(3).max(100),
-    }),
+    targets: z.array(zoneSchema).min(1).max(20).optional(),
+    // Accept existing single-zone lessons without a database migration.
+    target: zoneSchema.optional(),
+    start: pointSchema.default({ x: 50, y: 85 }),
     explanation: z.string().max(2000).default(''),
   })
-  .refine((a) => a.target.x + a.target.width <= 100 && a.target.y + a.target.height <= 100, {
-    message: 'Безопасная зона должна находиться внутри сцены',
-  });
+  .refine((a) => !!a.targets?.length || !!a.target, {
+    message: 'Добавьте хотя бы одну безопасную зону',
+  })
+  .transform(({ target, targets, ...activity }) => ({
+    ...activity,
+    targets: targets ?? [target!],
+  }));
 export function safeLesson(lesson: Record<string, any>, admin: boolean) {
   if (admin) return lesson;
   const activity =
@@ -62,7 +75,10 @@ export function safeLesson(lesson: Record<string, any>, admin: boolean) {
           ),
         }
       : lesson.type === 'hotspot'
-        ? { instruction: lesson.activity.instruction }
+        ? {
+            instruction: lesson.activity.instruction,
+            start: lesson.activity.start ?? { x: 50, y: 85 },
+          }
         : {};
   const { video_error, ...visible } = lesson;
   return { ...visible, activity };
@@ -83,10 +99,11 @@ export function evaluate(type: string, activity: any, response: unknown) {
   }
   if (type === 'hotspot') {
     const a = hotspotSchema.parse(activity);
-    const point = z.object({ x: coordinate, y: coordinate }).parse(response);
-    const t = a.target;
-    const passed =
-      point.x >= t.x && point.x <= t.x + t.width && point.y >= t.y && point.y <= t.y + t.height;
+    const point = pointSchema.parse(response);
+    const passed = a.targets.some(
+      (t) =>
+        point.x >= t.x && point.x <= t.x + t.width && point.y >= t.y && point.y <= t.y + t.height,
+    );
     return { score: passed ? 100 : 0, passed, explanation: a.explanation };
   }
   throw new HttpError(400, 'У этого урока нет задания');
@@ -122,10 +139,12 @@ export async function issueCertificate(userId: string, courseId: string) {
     ON CONFLICT(user_id,course_id) DO NOTHING`,
     [randomUUID(), userId, courseId],
   );
-  const [certificate] = await sql('SELECT id FROM certificates WHERE user_id=$1 AND course_id=$2', [
-    userId,
-    courseId,
-  ]);
+  const [certificate] = await sql(
+    `SELECT id FROM certificates WHERE user_id=$1 AND course_id=$2
+    AND EXISTS(SELECT 1 FROM lessons WHERE course_id=$2)
+    AND NOT EXISTS(SELECT 1 FROM lessons l LEFT JOIN progress p ON p.lesson_id=l.id AND p.user_id=$1 WHERE l.course_id=$2 AND p.completed_at IS NULL)`,
+    [userId, courseId],
+  );
   return certificate?.id || null;
 }
 export async function completeLesson(userId: string, lesson: any, score: number) {
@@ -138,7 +157,7 @@ export async function completeLesson(userId: string, lesson: any, score: number)
   return issueCertificate(userId, lesson.course_id);
 }
 export async function saveVideoProgress(userId: string, lesson: any, position: number, rate = 1) {
-  if (lesson.type !== 'video' || lesson.video_status !== 'ready' || !(lesson.duration > 0))
+  if (!lesson.video_id || lesson.video_status !== 'ready' || !(lesson.duration > 0))
     throw new HttpError(400, 'Видео ещё не готово');
   const progress = await transaction(async (db) => {
     await db.query(`INSERT INTO progress(user_id,lesson_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, [
@@ -160,12 +179,12 @@ export async function saveVideoProgress(userId: string, lesson: any, position: n
       Math.min(30, elapsed * rate + (elapsed > 0 ? 1 : 0), clamped - previous.position_seconds),
     );
     const watched = Math.min(lesson.duration, previous.watched_seconds + delta);
-    const completed = !!previous.completed_at || watched >= lesson.duration * 0.9;
+    const completeVideo = lesson.type === 'video' && watched >= lesson.duration * 0.9;
     const {
       rows: [next],
     } = await db.query(
       `UPDATE progress SET position_seconds=$3,watched_seconds=$4,last_ping_at=now(),updated_at=now(),completed_at=CASE WHEN $5 THEN COALESCE(completed_at,now()) ELSE completed_at END,xp=CASE WHEN $5 THEN 30 ELSE xp END WHERE user_id=$1 AND lesson_id=$2 RETURNING *`,
-      [userId, lesson.id, clamped, watched, completed],
+      [userId, lesson.id, clamped, watched, completeVideo],
     );
     return next;
   });

@@ -21,6 +21,7 @@ export type Question = {
   explanation?: string;
 };
 export type Zone = { x: number; y: number; width: number; height: number };
+export type Point = { x: number; y: number };
 export type Lesson = {
   id: string;
   course_id: string;
@@ -35,6 +36,8 @@ export type Lesson = {
     passPercent?: number;
     instruction?: string;
     target?: Zone;
+    targets?: Zone[];
+    start?: Point;
     explanation?: string;
   };
   completed_at?: string | null;

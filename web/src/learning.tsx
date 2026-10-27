@@ -135,7 +135,7 @@ function HotspotExercise({
   lesson: Lesson;
   onPassed: (id: string | null) => void;
 }) {
-  const [point, setPoint] = useState({ x: 50, y: 85 });
+  const [point, setPoint] = useState(() => lesson.activity.start ?? { x: 50, y: 85 });
   const [result, setResult] = useState<any>();
   const [busy, setBusy] = useState(false);
   const notice = useNotice();
@@ -201,6 +201,43 @@ function HotspotExercise({
     </div>
   );
 }
+function LessonVideo({
+  lesson,
+  onProgress,
+}: {
+  lesson: Lesson;
+  onProgress: (position: number, rate: number) => void;
+}) {
+  return (
+    <div className="panel video-lesson lesson-introduction">
+      {lesson.video_status === 'ready' && lesson.video_id ? (
+        <VideoPlayer
+          key={`${lesson.id}:${lesson.video_id}`}
+          id={lesson.video_id}
+          start={Number(lesson.position_seconds) || 0}
+          onProgress={onProgress}
+        />
+      ) : (
+        <Empty
+          title={
+            lesson.video_status === 'failed' ? 'Видео не удалось обработать' : 'Видео готовится'
+          }
+          text={
+            lesson.video_status === 'failed'
+              ? 'Сообщите администратору курса.'
+              : 'Материал появится после обработки.'
+          }
+        />
+      )}
+      <div className="video-lesson-note">
+        <ShieldNote />
+        {lesson.type === 'video'
+          ? 'Посмотрите не менее 90% видео, чтобы завершить урок. Позиция сохраняется автоматически.'
+          : 'Видео к заданию. После просмотра выполните задание ниже. Позиция сохраняется автоматически.'}
+      </div>
+    </div>
+  );
+}
 export function LessonPage() {
   const { courseId, lessonId } = useParams();
   const { data, error, refresh, setData } = useResource<Course>(`/api/courses/${courseId}`);
@@ -208,7 +245,12 @@ export function LessonPage() {
   const notice = useNotice();
   const [certificate, setCertificate] = useState<string | null>(null);
   const progressInFlight = useRef(false);
-  useEffect(() => setCertificate(null), [lessonId]);
+  const previousLesson = useRef(lessonId);
+  useEffect(() => {
+    setCertificate(null);
+    if (previousLesson.current !== lessonId) refresh();
+    previousLesson.current = lessonId;
+  }, [lessonId, refresh]);
   if (error) return <ErrorMessage message={error} retry={refresh} />;
   if (!data) return <Loading />;
   const lessons = data.lessons || [];
@@ -271,34 +313,7 @@ export function LessonPage() {
           </div>
           {lesson.type === 'video' ? (
             <>
-              <div className="panel video-lesson">
-                {lesson.video_status === 'ready' && lesson.video_id ? (
-                  <VideoPlayer
-                    key={lesson.id}
-                    id={lesson.video_id}
-                    start={Number(lesson.position_seconds) || 0}
-                    onProgress={(p, r) => void progress(p, r)}
-                  />
-                ) : (
-                  <Empty
-                    title={
-                      lesson.video_status === 'failed'
-                        ? 'Видео не удалось обработать'
-                        : 'Видео готовится'
-                    }
-                    text={
-                      lesson.video_status === 'failed'
-                        ? 'Сообщите администратору курса.'
-                        : 'Материал появится после обработки.'
-                    }
-                  />
-                )}
-                <div className="video-lesson-note">
-                  <ShieldNote />
-                  Посмотрите не менее 90% видео, чтобы завершить урок. Позиция сохраняется
-                  автоматически.
-                </div>
-              </div>
+              <LessonVideo lesson={lesson} onProgress={(p, r) => void progress(p, r)} />
               {lesson.body && (
                 <div className="panel lesson-notes">
                   <h3>Кратко об уроке</h3>
@@ -307,14 +322,24 @@ export function LessonPage() {
               )}
             </>
           ) : (
-            <div className="panel">
-              {lesson.body && <p className="exercise-intro">{lesson.body}</p>}
-              {lesson.type === 'quiz' ? (
-                <Quiz key={lesson.id} lesson={lesson} onPassed={passed} />
-              ) : (
-                <HotspotExercise key={lesson.id} lesson={lesson} onPassed={passed} />
+            <>
+              {lesson.video_id && (
+                <LessonVideo lesson={lesson} onProgress={(p, r) => void progress(p, r)} />
               )}
-            </div>
+              {lesson.type === 'quiz' && lesson.image_id && (
+                <figure className="panel exercise-photo">
+                  <img src={`/api/media/${lesson.image_id}/image.webp`} alt="Материал к тесту" />
+                </figure>
+              )}
+              <div className="panel">
+                {lesson.body && <p className="exercise-intro">{lesson.body}</p>}
+                {lesson.type === 'quiz' ? (
+                  <Quiz key={lesson.id} lesson={lesson} onPassed={passed} />
+                ) : (
+                  <HotspotExercise key={lesson.id} lesson={lesson} onPassed={passed} />
+                )}
+              </div>
+            </>
           )}
           {certificate && (
             <div className="course-success">

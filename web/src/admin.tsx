@@ -170,7 +170,8 @@ function newLesson(type: Lesson['type'], position: number): Lesson {
         : type === 'hotspot'
           ? {
               instruction: 'Переместите работника в безопасную пешеходную зону.',
-              target: { x: 4, y: 67, width: 28, height: 26 },
+              targets: [{ x: 4, y: 67, width: 28, height: 26 }],
+              start: { x: 50, y: 85 },
               explanation: 'Внимательно посмотрите на разметку и путь движения транспорта.',
             }
           : {},
@@ -187,10 +188,28 @@ function LessonEditor({
   onClose: () => void;
   courseId: string;
 }) {
-  const [draft, setDraft] = useState<Lesson>(structuredClone(lesson));
+  const [draft, setDraft] = useState<Lesson>(() => {
+    const copy = structuredClone(lesson);
+    if (copy.type === 'hotspot') {
+      copy.activity.targets ??= copy.activity.target ? [copy.activity.target] : [];
+      copy.activity.start ??= { x: 50, y: 85 };
+      delete copy.activity.target;
+    }
+    return copy;
+  });
+  const [sceneMode, setSceneMode] = useState<'zones' | 'start'>('zones');
+  const [activeZone, setActiveZone] = useState(0);
   const [busy, setBusy] = useState(false);
   const media = useResource<Media[]>('/api/media');
   const notice = useNotice();
+  const targets = draft.activity.targets || [];
+  const selectedZone = targets[activeZone];
+  useEffect(() => {
+    if (!media.data?.some((item) => item.status === 'queued' || item.status === 'processing'))
+      return;
+    const timer = setInterval(media.refresh, 5000);
+    return () => clearInterval(timer);
+  }, [media.data, media.refresh]);
   function field(key: string, value: unknown) {
     setDraft((d) => ({ ...d, [key]: value }));
   }
@@ -227,6 +246,7 @@ function LessonEditor({
       form.append('file', file);
       const result = await api('/api/images', { method: 'POST', body: form });
       field('image_id', result.id);
+      media.refresh();
       notice('Сцена загружена');
     } catch (e) {
       notice((e as Error).message, true);
@@ -258,6 +278,8 @@ function LessonEditor({
               onChange={(e) => {
                 const fresh = newLesson(e.target.value as Lesson['type'], draft.position);
                 setDraft({ ...fresh, title: draft.title, body: draft.body });
+                setActiveZone(0);
+                setSceneMode('zones');
               }}
             >
               <option value="video">Видеоурок</option>
@@ -276,47 +298,92 @@ function LessonEditor({
             placeholder="Дополнительная информация для ученика"
           />
         </label>
-        {draft.type === 'video' && (
-          <>
-            <label>
-              Видео из медиатеки
-              <select
-                value={draft.video_id || ''}
-                onChange={(e) => field('video_id', e.target.value || null)}
-              >
-                <option value="">Выберите видео</option>
-                {media.data
-                  ?.filter((m) => m.kind === 'video')
-                  .map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} ·{' '}
-                      {m.status === 'ready'
-                        ? 'Готово'
-                        : m.status === 'failed'
-                          ? 'Ошибка'
-                          : 'Обработка'}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            {media.error && <p className="form-error">{media.error}</p>}
-            <VideoUpload
-              onComplete={(id) => {
-                field('video_id', id);
-                media.refresh();
-              }}
-            />
-            <div className="info-box">
-              <Film size={20} />
-              <p>
-                Урок можно сохранить во время обработки. Публикация курса станет доступна, когда
-                видео будет готово.
-              </p>
-            </div>
-          </>
-        )}
+        <section className="lesson-media-editor">
+          <h3>{draft.type === 'video' ? 'Видео урока' : 'Видео перед заданием (необязательно)'}</h3>
+          <label>
+            Видео из медиатеки
+            <select
+              value={draft.video_id || ''}
+              onChange={(e) => field('video_id', e.target.value || null)}
+            >
+              <option value="">{draft.type === 'video' ? 'Выберите видео' : 'Без видео'}</option>
+              {media.data
+                ?.filter((m) => m.kind === 'video')
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ·{' '}
+                    {m.status === 'ready'
+                      ? 'Готово'
+                      : m.status === 'failed'
+                        ? 'Ошибка'
+                        : 'Обработка'}
+                  </option>
+                ))}
+            </select>
+          </label>
+          {media.error && <p className="form-error">{media.error}</p>}
+          <VideoUpload
+            onComplete={(id) => {
+              field('video_id', id);
+              media.refresh();
+            }}
+          />
+          <div className="info-box">
+            <Film size={20} />
+            <p>
+              Для черновика можно выбрать обрабатываемое видео. В опубликованный курс можно добавить
+              готовое видео. В тесте видео показывается над вопросами.
+            </p>
+          </div>
+        </section>
         {draft.type === 'quiz' && (
           <>
+            <section className="lesson-media-editor">
+              <h3>Фотография перед тестом (необязательно)</h3>
+              <label>
+                Фотография из медиатеки
+                <select
+                  value={draft.image_id || ''}
+                  onChange={(e) => field('image_id', e.target.value || null)}
+                >
+                  <option value="">Без фотографии</option>
+                  {media.data
+                    ?.filter((m) => m.kind === 'image' && m.status === 'ready')
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="button secondary small image-upload-label">
+                <ImagePlus size={16} />
+                Загрузить фотографию
+                <input
+                  aria-label="Загрузить фотографию перед тестом"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  hidden
+                  disabled={busy}
+                  onChange={(e) => void image(e.target.files?.[0])}
+                />
+              </label>
+              {draft.image_id && (
+                <div className="lesson-image-preview">
+                  <img
+                    src={`/api/media/${draft.image_id}/image.webp`}
+                    alt="Фотография перед тестом"
+                  />
+                  <button
+                    type="button"
+                    className="text-button danger-text"
+                    onClick={() => field('image_id', null)}
+                  >
+                    Убрать фотографию
+                  </button>
+                </div>
+              )}
+            </section>
             <div className="quiz-settings">
               <label>
                 Проходной результат, %
@@ -469,7 +536,10 @@ function LessonEditor({
             <div className="scene-editor-header">
               <div>
                 <h3>Рабочая сцена</h3>
-                <p>Протяните прямоугольник, чтобы выделить безопасную зону.</p>
+                <p>
+                  Правильным ответом будет любая зелёная зона. Выделите зоны и задайте начальное
+                  положение работника.
+                </p>
               </div>
               <label className="button secondary small image-upload-label">
                 <ImagePlus size={16} />
@@ -482,33 +552,138 @@ function LessonEditor({
                 />
               </label>
             </div>
+            <div className="scene-toolbar" aria-label="Режим редактирования сцены">
+              <button
+                type="button"
+                className={`button small ${sceneMode === 'zones' ? 'primary' : 'secondary'}`}
+                aria-pressed={sceneMode === 'zones'}
+                onClick={() => setSceneMode('zones')}
+              >
+                Безопасные зоны
+              </button>
+              <button
+                type="button"
+                className={`button small ${sceneMode === 'start' ? 'primary' : 'secondary'}`}
+                aria-pressed={sceneMode === 'start'}
+                onClick={() => setSceneMode('start')}
+              >
+                Начальное положение
+              </button>
+            </div>
+            <p className="scene-mode-help">
+              {sceneMode === 'zones'
+                ? 'Выберите зону в списке и протяните прямоугольник на сцене.'
+                : 'Нажмите в нужной точке сцены или перетащите работника. Стрелки клавиатуры тоже работают.'}
+            </p>
+            <div className="scene-zone-list">
+              {targets.map((_, index) => (
+                <div key={index}>
+                  <button
+                    type="button"
+                    className={`button small ${index === activeZone ? 'primary' : 'secondary'}`}
+                    aria-pressed={index === activeZone}
+                    onClick={() => {
+                      setActiveZone(index);
+                      setSceneMode('zones');
+                    }}
+                  >
+                    Зона {index + 1}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button danger-text"
+                    disabled={targets.length === 1}
+                    aria-label={`Удалить зону ${index + 1}`}
+                    onClick={() => {
+                      const next = targets.filter((_, i) => i !== index);
+                      activity('targets', next);
+                      setActiveZone((current) =>
+                        current > index ? current - 1 : Math.min(current, next.length - 1),
+                      );
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="text-button"
+                disabled={targets.length >= 20}
+                onClick={() => {
+                  activity('targets', [...targets, { x: 40, y: 40, width: 15, height: 15 }]);
+                  setActiveZone(targets.length);
+                  setSceneMode('zones');
+                }}
+              >
+                <Plus size={16} />
+                Добавить зону
+              </button>
+            </div>
             <HotspotScene
               image={draft.image_id ? `/api/media/${draft.image_id}/image.webp` : undefined}
-              zone={draft.activity.target}
-              onZone={(zone) => activity('target', zone)}
-              editing
+              zones={targets}
+              activeZone={activeZone}
+              onZone={(index, zone) =>
+                activity(
+                  'targets',
+                  targets.map((current, i) => (i === index ? zone : current)),
+                )
+              }
+              point={draft.activity.start}
+              onPoint={(point) => activity('start', point)}
+              mode={sceneMode}
             />
-            <div className="zone-inputs">
-              {(['x', 'y', 'width', 'height'] as const).map((key, i) => (
-                <label key={key}>
-                  {['X, %', 'Y, %', 'Ширина, %', 'Высота, %'][i]}
-                  <input
-                    type="number"
-                    step="0.1"
-                    min={i < 2 ? 0 : 3}
-                    max={100}
-                    required
-                    value={Math.round((draft.activity.target?.[key] || 0) * 10) / 10}
-                    onChange={(e) =>
-                      activity('target', {
-                        ...draft.activity.target,
-                        [key]: Number(e.target.value),
-                      })
-                    }
-                  />
-                </label>
-              ))}
-            </div>
+            {sceneMode === 'zones' && selectedZone && (
+              <div className="zone-inputs">
+                {(['x', 'y', 'width', 'height'] as const).map((key, i) => (
+                  <label key={key}>
+                    {['X, %', 'Y, %', 'Ширина, %', 'Высота, %'][i]}
+                    <input
+                      type="number"
+                      step="0.1"
+                      min={i < 2 ? 0 : 3}
+                      max={100}
+                      required
+                      value={Math.round(selectedZone[key] * 10) / 10}
+                      onChange={(e) =>
+                        activity(
+                          'targets',
+                          targets.map((zone, index) =>
+                            index === activeZone
+                              ? { ...zone, [key]: Number(e.target.value) }
+                              : zone,
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+            {sceneMode === 'start' && (
+              <div className="zone-inputs start-inputs">
+                {(['x', 'y'] as const).map((key) => (
+                  <label key={key}>
+                    Начальная позиция {key.toUpperCase()}, %
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.1}
+                      required
+                      value={Math.round((draft.activity.start?.[key] ?? 0) * 10) / 10}
+                      onChange={(e) =>
+                        activity('start', {
+                          ...draft.activity.start,
+                          [key]: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
             <label>
               Подсказка после проверки
               <textarea
@@ -592,7 +767,12 @@ export function CourseEditor() {
     }
   }
   async function remove(l: Lesson) {
-    if (!window.confirm(`Удалить урок «${l.title}»?`)) return;
+    if (
+      !window.confirm(
+        `Удалить урок «${l.title}»? Его попытки, прогресс и баллы учеников будут удалены. Если это последний урок, курс перейдёт в черновики. Ранее выданные сертификаты сохранятся.`,
+      )
+    )
+      return;
     try {
       await api(`/api/lessons/${l.id}`, { method: 'DELETE' });
       refresh();
@@ -668,8 +848,9 @@ export function CourseEditor() {
             <div className="info-box">
               <ShieldCheck size={20} />
               <p>
-                Для редактирования снимите курс с публикации. Если ученики уже начали обучение,
-                создайте новую версию — их результаты сохранятся.
+                Курс можно редактировать прямо сейчас. Изменения будут видны ученикам при следующем
+                открытии урока. Полученные результаты и сертификаты сохраняются; новые уроки
+                потребуется пройти отдельно.
               </p>
             </div>
           )}
@@ -702,7 +883,7 @@ export function CourseEditor() {
                   <div className="editor-row-actions">
                     <button
                       className="icon-button"
-                      disabled={data.published || busy || i === 0}
+                      disabled={busy || i === 0}
                       aria-label="Переместить урок выше"
                       onClick={() => void move(l, -1)}
                     >
@@ -710,7 +891,7 @@ export function CourseEditor() {
                     </button>
                     <button
                       className="icon-button"
-                      disabled={data.published || busy || i === lessons.length - 1}
+                      disabled={busy || i === lessons.length - 1}
                       aria-label="Переместить урок ниже"
                       onClick={() => void move(l, 1)}
                     >
@@ -718,7 +899,7 @@ export function CourseEditor() {
                     </button>
                     <button
                       className="icon-button"
-                      disabled={data.published}
+                      disabled={busy}
                       aria-label={`Редактировать ${l.title}`}
                       onClick={() => setEditing(l)}
                     >
@@ -726,7 +907,7 @@ export function CourseEditor() {
                     </button>
                     <button
                       className="icon-button danger-text"
-                      disabled={data.published}
+                      disabled={busy}
                       aria-label={`Удалить ${l.title}`}
                       onClick={() => void remove(l)}
                     >
@@ -737,42 +918,40 @@ export function CourseEditor() {
               );
             })}
           </div>
-          {!data.published && (
-            <div className="add-lesson-options">
-              {[
-                {
-                  type: 'video',
-                  label: 'Видеоурок',
-                  text: 'Загрузите видео и добавьте пояснения',
-                  icon: Video,
-                },
-                {
-                  type: 'quiz',
-                  label: 'Тест',
-                  text: 'Вопросы с выбором правильного ответа',
-                  icon: ListChecks,
-                },
-                {
-                  type: 'hotspot',
-                  label: 'Визуальное задание',
-                  text: 'Сцена, персонаж и безопасная зона',
-                  icon: HardHat,
-                },
-              ].map(({ type, label, text, icon: Icon }) => (
-                <button
-                  key={type}
-                  onClick={() => setEditing(newLesson(type as Lesson['type'], lessons.length))}
-                >
-                  <span>
-                    <Icon size={23} />
-                  </span>
-                  <strong>{label}</strong>
-                  <small>{text}</small>
-                  <Plus size={18} />
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="add-lesson-options">
+            {[
+              {
+                type: 'video',
+                label: 'Видеоурок',
+                text: 'Загрузите видео и добавьте пояснения',
+                icon: Video,
+              },
+              {
+                type: 'quiz',
+                label: 'Тест',
+                text: 'Вопросы с выбором правильного ответа',
+                icon: ListChecks,
+              },
+              {
+                type: 'hotspot',
+                label: 'Визуальное задание',
+                text: 'Сцена, персонаж и безопасная зона',
+                icon: HardHat,
+              },
+            ].map(({ type, label, text, icon: Icon }) => (
+              <button
+                key={type}
+                onClick={() => setEditing(newLesson(type as Lesson['type'], lessons.length))}
+              >
+                <span>
+                  <Icon size={23} />
+                </span>
+                <strong>{label}</strong>
+                <small>{text}</small>
+                <Plus size={18} />
+              </button>
+            ))}
+          </div>
         </section>
         <aside className="panel course-settings">
           <h3>Настройки курса</h3>

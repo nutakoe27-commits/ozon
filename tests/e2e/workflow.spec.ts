@@ -1,11 +1,22 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type BrowserContext } from '@playwright/test';
 const stamp = Date.now();
+const sessions = new Map<string, Awaited<ReturnType<BrowserContext['cookies']>>>();
 async function login(page: Page, email = 'admin@praktika.test', password = 'DemoAdmin2026!') {
+  const saved = sessions.get(email);
+  if (saved) {
+    await page.context().addCookies(saved);
+    await page.goto('/');
+    if ((await page.request.get('/api/auth/me')).ok()) {
+      await expect(page.getByRole('heading', { name: /Рады видеть/ })).toBeVisible();
+      return;
+    }
+  }
   await page.goto('/');
   await page.getByLabel('Электронная почта', { exact: true }).fill(email);
   await page.getByLabel('Пароль', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Войти в аккаунт' }).click();
   await expect(page.getByRole('heading', { name: /Рады видеть/ })).toBeVisible();
+  sessions.set(email, await page.context().cookies());
 }
 async function adminApi(page: Page, url: string, body: any, method = 'POST') {
   const me = await page.request.get('/api/auth/me');
@@ -76,6 +87,7 @@ test('course constructor, learner quiz, visual exercise and certificate form a w
   await expect(page.getByRole('heading', { name: 'Отличная работа!' })).toBeVisible();
   await page.getByRole('link', { name: 'Следующий урок', exact: true }).click();
   const scene = page.locator('.hotspot-scene');
+  await expect(scene).toBeVisible();
   const box = (await scene.boundingBox())!;
   await page.mouse.click(box.x + box.width * 0.17, box.y + box.height * 0.8);
   await page.getByRole('button', { name: 'Проверить решение', exact: true }).click();
@@ -235,4 +247,219 @@ test('course deletion confirms, cancels and retries before removing a course alr
   await expect(page.getByRole('heading', { name: title, exact: true })).toHaveCount(0);
   expect((await page.request.get(`/api/courses/${course.id}`)).status()).toBe(404);
   expect((await request.get(`/api/courses/${course.id}`)).status()).toBe(404);
+});
+test('a started published course supports multiple zones and a persistent worker starting point', async ({
+  page,
+  request,
+  browser,
+  baseURL,
+}) => {
+  await login(page);
+  const course = await adminApi(page, '/api/courses', { title: `Редактируемая практика ${stamp}` });
+  const activity = {
+    passPercent: 100,
+    questions: [
+      {
+        id: 'q',
+        prompt: 'Как действовать безопасно?',
+        options: ['Остановиться', 'Продолжить'],
+        correctIndex: 0,
+      },
+    ],
+  };
+  const first = await adminApi(page, `/api/courses/${course.id}/lessons`, {
+    title: 'Изученные правила',
+    type: 'quiz',
+    activity,
+  });
+  const scene = await adminApi(page, `/api/courses/${course.id}/lessons`, {
+    title: 'Рабочая сцена',
+    type: 'hotspot',
+    position: 1,
+    activity: {
+      instruction: 'Поставьте работника в любую безопасную зону.',
+      target: { x: 4, y: 67, width: 28, height: 26 },
+    },
+  });
+  let learner: Page | undefined;
+  try {
+    await adminApi(page, `/api/courses/${course.id}`, { published: true }, 'PATCH');
+    const auth = await request.post('/api/auth/login', {
+      data: { email: 'student@praktika.test', password: 'DemoStudent2026!' },
+    });
+    expect(auth.ok()).toBeTruthy();
+    const { csrf } = await auth.json();
+    const headers = { 'x-csrf-token': csrf };
+    expect((await request.post(`/api/courses/${course.id}/enroll`, { headers })).ok()).toBeTruthy();
+    const attempt = await request.post(`/api/lessons/${first.id}/attempt`, {
+      headers,
+      data: { response: { q: 0 } },
+    });
+    expect((await attempt.json()).passed).toBe(true);
+    await page.goto(`/admin/courses/${course.id}`);
+    await page.getByRole('button', { name: 'Редактировать Рабочая сцена', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Редактировать урок' });
+    await dialog.getByLabel('Ширина, %', { exact: true }).fill('12');
+    await dialog.getByRole('button', { name: 'Добавить зону', exact: true }).click();
+    const canvas = dialog.locator('.hotspot-scene');
+    await canvas.scrollIntoViewIfNeeded();
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.7);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.31, box.y + box.height * 0.9, { steps: 5 });
+    await page.mouse.up();
+    await expect(canvas.locator('.target-zone')).toHaveCount(2);
+    await dialog.getByRole('button', { name: 'Начальное положение', exact: true }).click();
+    await canvas.scrollIntoViewIfNeeded();
+    const startBox = (await canvas.boundingBox())!;
+    await page.mouse.click(startBox.x + startBox.width * 0.55, startBox.y + startBox.height * 0.82);
+    await expect(dialog.getByLabel('Начальная позиция X, %', { exact: true })).toHaveValue('55');
+    await dialog.locator('.worker-marker').press('ArrowRight');
+    await expect(dialog.getByLabel('Начальная позиция X, %', { exact: true })).toHaveValue('57');
+    await dialog.getByLabel('Начальная позиция X, %', { exact: true }).fill('55');
+    await dialog.getByLabel('Начальная позиция Y, %', { exact: true }).fill('84');
+    await dialog.getByRole('button', { name: 'Сохранить урок', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Снять с публикации', exact: true }),
+    ).toBeVisible();
+    await page.reload();
+    await page.getByRole('button', { name: 'Редактировать Рабочая сцена', exact: true }).click();
+    await expect(dialog.locator('.target-zone')).toHaveCount(2);
+    await dialog.getByRole('button', { name: 'Начальное положение', exact: true }).click();
+    await expect(dialog.getByLabel('Начальная позиция X, %', { exact: true })).toHaveValue('55');
+    await expect(dialog.getByLabel('Начальная позиция Y, %', { exact: true })).toHaveValue('84');
+    await canvas.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: 'test-results/multi-zone-editor.png', fullPage: true });
+    await dialog.getByRole('button', { name: 'Закрыть', exact: true }).click();
+    learner = await browser.newPage({ baseURL });
+    await login(learner, 'student@praktika.test', 'DemoStudent2026!');
+    await learner.goto(`/learn/${course.id}/${scene.id}`);
+    const marker = learner.locator('.worker-marker');
+    await expect(marker).toBeVisible();
+    expect(await marker.evaluate((el) => (el as HTMLElement).style.left)).toBe('55%');
+    expect(await marker.evaluate((el) => (el as HTMLElement).style.top)).toBe('84%');
+    await expect(learner.locator('.target-zone')).toHaveCount(0);
+    await learner.getByRole('button', { name: 'Проверить решение', exact: true }).click();
+    await expect(
+      learner.getByRole('heading', { name: 'Здесь находиться небезопасно' }),
+    ).toBeVisible();
+    const taskCanvas = learner.locator('.hotspot-scene');
+    await taskCanvas.scrollIntoViewIfNeeded();
+    const taskBox = (await taskCanvas.boundingBox())!;
+    await learner.mouse.click(taskBox.x + taskBox.width * 0.25, taskBox.y + taskBox.height * 0.8);
+    await learner.getByRole('button', { name: 'Проверить решение', exact: true }).click();
+    await expect(
+      learner.getByRole('heading', { name: 'Верно! Вы выбрали безопасное место.' }),
+    ).toBeVisible();
+    const state = await learner.request.get(`/api/courses/${course.id}`);
+    expect(
+      (await state.json()).lessons.find((lesson: any) => lesson.id === first.id).completed_at,
+    ).toBeTruthy();
+  } finally {
+    await learner?.close();
+    await adminApi(page, `/api/courses/${course.id}`, { confirm: true }, 'DELETE');
+  }
+});
+test('quiz constructor adds video and photo above questions, with completion earned only by answering', async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  await login(page);
+  const course = await adminApi(page, '/api/courses', {
+    title: `Тест с медиаматериалами ${stamp}`,
+  });
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const directory = await mkdtemp('/tmp/praktika-introduction-');
+  const source = `${directory}/quiz-introduction.mp4`;
+  let learner: Page | undefined;
+  try {
+    execFileSync('ffmpeg', [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc2=size=640x360:rate=12',
+      '-t',
+      '2',
+      '-c:v',
+      'libx264',
+      '-threads',
+      '1',
+      '-pix_fmt',
+      'yuv420p',
+      source,
+    ]);
+    await page.goto(`/admin/courses/${course.id}`);
+    await page.getByRole('button', { name: 'Тест Вопросы с выбором правильного ответа' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Новый урок' });
+    await dialog
+      .getByLabel('Название урока', { exact: true })
+      .fill('Смотрите, изучайте и отвечайте');
+    const sharp = (await import('sharp')).default;
+    const image = await sharp({
+      create: { width: 800, height: 400, channels: 3, background: '#b7cba3' },
+    })
+      .png()
+      .toBuffer();
+    await dialog
+      .getByLabel('Загрузить фотографию перед тестом', { exact: true })
+      .setInputFiles({ name: 'quiz-introduction.png', mimeType: 'image/png', buffer: image });
+    await expect(
+      dialog.getByRole('img', { name: 'Фотография перед тестом', exact: true }),
+    ).toBeVisible();
+    await dialog
+      .getByLabel('Текст вопроса', { exact: true })
+      .fill('Что нужно сделать перед началом работы?');
+    await dialog
+      .getByRole('textbox', { name: 'Вариант 1 вопроса 1', exact: true })
+      .fill('Проверить безопасность');
+    await dialog
+      .getByRole('textbox', { name: 'Вариант 2 вопроса 1', exact: true })
+      .fill('Сразу приступить');
+    await dialog.locator('.upload-widget input[type=file]').setInputFiles(source);
+    await dialog.getByRole('button', { name: 'Загрузить', exact: true }).click();
+    await expect(
+      dialog.getByRole('combobox', { name: 'Видео из медиатеки', exact: true }),
+    ).toContainText('quiz-introduction.mp4 · Готово', { timeout: 20000 });
+    await dialog.getByRole('button', { name: 'Сохранить урок', exact: true }).click();
+    await page.getByRole('button', { name: 'Опубликовать', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Снять с публикации', exact: true }),
+    ).toBeVisible();
+    learner = await browser.newPage({ baseURL });
+    await login(learner, 'student@praktika.test', 'DemoStudent2026!');
+    await learner.goto(`/courses/${course.id}`);
+    await learner.getByRole('button', { name: 'Записаться на курс', exact: true }).click();
+    const video = learner.locator('video');
+    await expect(video).toHaveJSProperty('readyState', 4);
+    const photo = learner.getByRole('img', { name: 'Материал к тесту', exact: true });
+    await expect(photo).toHaveJSProperty('naturalWidth', 800);
+    const positions = await learner.evaluate(() => ({
+      video: document.querySelector('.lesson-introduction')!.getBoundingClientRect().top,
+      photo: document.querySelector('.exercise-photo')!.getBoundingClientRect().top,
+      quiz: document.querySelector('.quiz-question')!.getBoundingClientRect().top,
+    }));
+    expect(positions.video).toBeLessThan(positions.photo);
+    expect(positions.photo).toBeLessThan(positions.quiz);
+    await learner.getByLabel('Скорость воспроизведения', { exact: true }).selectOption('2');
+    await learner.getByRole('button', { name: 'Смотреть видео', exact: true }).click();
+    await expect
+      .poll(() => video.evaluate((v: HTMLVideoElement) => v.ended), { timeout: 20000 })
+      .toBe(true);
+    const state = await learner.request.get(`/api/courses/${course.id}`);
+    expect((await state.json()).lessons[0].completed_at).toBeNull();
+    await learner.getByText('Проверить безопасность', { exact: true }).click();
+    await learner.getByRole('button', { name: 'Проверить ответы', exact: true }).click();
+    await expect(learner.getByRole('heading', { name: 'Отличная работа!' })).toBeVisible();
+    await learner.screenshot({ path: 'test-results/quiz-introduction.png', fullPage: true });
+  } finally {
+    await learner?.close();
+    await rm(directory, { recursive: true, force: true });
+    await adminApi(page, `/api/courses/${course.id}`, { confirm: true }, 'DELETE');
+  }
 });

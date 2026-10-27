@@ -1,25 +1,28 @@
 import { useRef, useState } from 'react';
 import { Move } from 'lucide-react';
-import type { Zone } from './types';
+import type { Point, Zone } from './types';
 const clamp = (n: number, min = 0, max = 100) => Math.max(min, Math.min(max, n));
 export function HotspotScene({
   image,
   point,
   onPoint,
-  zone,
+  zones = [],
+  activeZone = 0,
   onZone,
-  editing = false,
+  mode = 'answer',
 }: {
   image?: string;
-  point?: { x: number; y: number };
-  onPoint?: (point: { x: number; y: number }) => void;
-  zone?: Zone;
-  onZone?: (zone: Zone) => void;
-  editing?: boolean;
+  point?: Point;
+  onPoint?: (point: Point) => void;
+  zones?: Zone[];
+  activeZone?: number;
+  onZone?: (index: number, zone: Zone) => void;
+  mode?: 'answer' | 'zones' | 'start';
 }) {
   const scene = useRef<HTMLDivElement>(null);
   const anchor = useRef<{ x: number; y: number } | null>(null);
   const dragging = useRef(false);
+  const dragOffset = useRef<Point>({ x: 0, y: 0 });
   const [aspect, setAspect] = useState(5 / 3);
   function coordinates(e: React.PointerEvent) {
     const rect = scene.current!.getBoundingClientRect();
@@ -30,32 +33,39 @@ export function HotspotScene({
   }
   return (
     <div
-      className={`hotspot-scene ${editing ? 'editing' : ''}`}
+      className={`hotspot-scene ${mode === 'zones' ? 'editing' : ''}`}
       ref={scene}
       style={{ aspectRatio: aspect }}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         e.currentTarget.setPointerCapture(e.pointerId);
         const p = coordinates(e);
-        if (editing) {
-          anchor.current = p;
-          onZone?.({ ...p, width: 3, height: 3 });
+        if (mode === 'zones') {
+          const start = { x: Math.min(p.x, 97), y: Math.min(p.y, 97) };
+          anchor.current = start;
+          onZone?.(activeZone, { ...start, width: 3, height: 3 });
         } else {
           dragging.current = true;
-          onPoint?.(p);
+          const marker = (e.target as Element).closest('.worker-marker');
+          dragOffset.current =
+            marker && point ? { x: point.x - p.x, y: point.y - p.y } : { x: 0, y: 0 };
+          onPoint?.({ x: clamp(p.x + dragOffset.current.x), y: clamp(p.y + dragOffset.current.y) });
         }
       }}
       onPointerMove={(e) => {
         const p = coordinates(e);
-        if (editing && anchor.current) {
+        if (mode === 'zones' && anchor.current) {
           const a = anchor.current;
-          onZone?.({
-            x: Math.min(a.x, p.x),
-            y: Math.min(a.y, p.y),
-            width: Math.max(3, Math.abs(p.x - a.x)),
-            height: Math.max(3, Math.abs(p.y - a.y)),
+          const x = Math.min(a.x, p.x),
+            y = Math.min(a.y, p.y);
+          onZone?.(activeZone, {
+            x,
+            y,
+            width: Math.min(100 - x, Math.max(3, Math.abs(p.x - a.x))),
+            height: Math.min(100 - y, Math.max(3, Math.abs(p.y - a.y))),
           });
-        } else if (dragging.current) onPoint?.(p);
+        } else if (dragging.current)
+          onPoint?.({ x: clamp(p.x + dragOffset.current.x), y: clamp(p.y + dragOffset.current.y) });
       }}
       onPointerUp={() => {
         anchor.current = null;
@@ -76,25 +86,33 @@ export function HotspotScene({
             e.currentTarget.src = '/assets/warehouse.svg';
         }}
       />
-      {editing && zone && (
-        <div
-          className="target-zone"
-          style={{
-            left: `${zone.x}%`,
-            top: `${zone.y}%`,
-            width: `${zone.width}%`,
-            height: `${zone.height}%`,
-          }}
-        >
-          <span>Безопасная зона</span>
-        </div>
-      )}
-      {!editing && point && (
+      {mode !== 'answer' &&
+        zones.map((zone, index) => (
+          <div
+            key={index}
+            className={`target-zone ${index === activeZone ? 'active' : ''}`}
+            data-zone-index={index}
+            style={{
+              left: `${zone.x}%`,
+              top: `${zone.y}%`,
+              width: `${zone.width}%`,
+              height: `${zone.height}%`,
+            }}
+          >
+            <span>Зона {index + 1}</span>
+          </div>
+        ))}
+      {point && (
         <button
           type="button"
           className="worker-marker"
+          disabled={mode === 'zones'}
           style={{ left: `${point.x}%`, top: `${point.y}%` }}
-          aria-label="Переместить работника. Используйте стрелки на клавиатуре или перетаскивание."
+          aria-label={
+            mode === 'start'
+              ? 'Начальное положение работника. Используйте стрелки на клавиатуре или перетаскивание.'
+              : 'Переместить работника. Используйте стрелки на клавиатуре или перетаскивание.'
+          }
           aria-valuetext={`X ${Math.round(point.x)}, Y ${Math.round(point.y)}`}
           onKeyDown={(e) => {
             const keys: Record<string, [number, number]> = {

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { z, ZodError } from 'zod';
+import type { PoolClient } from 'pg';
 import { config } from './config.js';
 import { sql, transaction } from './db.js';
 import {
@@ -61,7 +62,11 @@ const lessonSchema = z.object({
   image_id: uuid.nullable().default(null),
   activity: z.unknown().default({}),
 });
-async function validateLesson(body: z.infer<typeof lessonSchema>) {
+async function validateLesson(
+  body: z.infer<typeof lessonSchema>,
+  published: boolean,
+  db: PoolClient,
+) {
   if (body.type === 'quiz') body.activity = quizSchema.parse(body.activity);
   if (body.type === 'hotspot') body.activity = hotspotSchema.parse(body.activity);
   for (const [id, kind] of [
@@ -69,24 +74,26 @@ async function validateLesson(body: z.infer<typeof lessonSchema>) {
     [body.image_id, 'image'],
   ]) {
     if (!id) continue;
-    const [media] = await sql('SELECT kind FROM media WHERE id=$1', [id]);
+    const {
+      rows: [media],
+    } = await db.query('SELECT kind,status FROM media WHERE id=$1', [id]);
     if (media?.kind !== kind) throw new HttpError(400, 'Выбран неподходящий материал');
+    if (published && media.status !== 'ready')
+      throw new HttpError(
+        400,
+        'Дождитесь готовности материала перед добавлением в опубликованный курс',
+      );
   }
+  if (published && body.type === 'video' && !body.video_id)
+    throw new HttpError(400, 'Выберите готовое видео для опубликованного урока');
   return body;
 }
-async function editableCourse(id: string) {
-  const [course] = await sql('SELECT published FROM courses WHERE id=$1', [id]);
+async function editableCourse(id: string, db: PoolClient) {
+  const {
+    rows: [course],
+  } = await db.query('SELECT published FROM courses WHERE id=$1 FOR UPDATE', [id]);
   if (!course) throw new HttpError(404, 'Курс не найден');
-  if (course.published) throw new HttpError(409, 'Сначала снимите курс с публикации');
-  const [used] = await sql(
-    'SELECT 1 FROM progress p JOIN lessons l ON l.id=p.lesson_id WHERE l.course_id=$1 LIMIT 1',
-    [id],
-  );
-  if (used)
-    throw new HttpError(
-      409,
-      'Курс уже проходят ученики. Создайте копию для новой версии — результаты сохранятся.',
-    );
+  return course;
 }
 export async function buildApp(options: { logger?: boolean; rateLimit?: boolean } = {}) {
   const app = Fastify({
@@ -296,35 +303,42 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
     requireAdmin(request);
     const { id } = request.params as any;
     const body = courseSchema.partial().parse(request.body);
-    const [current] = await sql('SELECT * FROM courses WHERE id=$1', [id]);
-    if (!current) throw new HttpError(404, 'Курс не найден');
-    const merged = { ...current, ...body };
-    if (merged.published) {
-      const lessons = await sql(
-        `SELECT l.*,m.status AS video_status FROM lessons l LEFT JOIN media m ON m.id=l.video_id WHERE l.course_id=$1`,
-        [id],
-      );
-      if (!lessons.length) throw new HttpError(400, 'Добавьте хотя бы один урок перед публикацией');
-      for (const lesson of lessons) {
-        if (lesson.type === 'video' && lesson.video_status !== 'ready')
-          throw new HttpError(400, `Дождитесь обработки видео: ${lesson.title}`);
-        if (lesson.type === 'quiz') quizSchema.parse(lesson.activity);
-        if (lesson.type === 'hotspot') hotspotSchema.parse(lesson.activity);
+    return transaction(async (db) => {
+      const {
+        rows: [current],
+      } = await db.query('SELECT * FROM courses WHERE id=$1 FOR UPDATE', [id]);
+      if (!current) throw new HttpError(404, 'Курс не найден');
+      const merged = { ...current, ...body };
+      if (merged.published) {
+        const { rows: lessons } = await db.query(
+          `SELECT l.*,m.status AS video_status FROM lessons l LEFT JOIN media m ON m.id=l.video_id WHERE l.course_id=$1`,
+          [id],
+        );
+        if (!lessons.length)
+          throw new HttpError(400, 'Добавьте хотя бы один урок перед публикацией');
+        for (const lesson of lessons) {
+          if ((lesson.type === 'video' || lesson.video_id) && lesson.video_status !== 'ready')
+            throw new HttpError(400, `Дождитесь обработки видео: ${lesson.title}`);
+          if (lesson.type === 'quiz') quizSchema.parse(lesson.activity);
+          if (lesson.type === 'hotspot') hotspotSchema.parse(lesson.activity);
+        }
       }
-    }
-    const [updated] = await sql(
-      'UPDATE courses SET title=$2,description=$3,category=$4,color=$5,published=$6,self_enroll=$7,updated_at=now() WHERE id=$1 RETURNING *',
-      [
-        id,
-        merged.title,
-        merged.description,
-        merged.category,
-        merged.color,
-        merged.published,
-        merged.self_enroll,
-      ],
-    );
-    return updated;
+      const {
+        rows: [updated],
+      } = await db.query(
+        'UPDATE courses SET title=$2,description=$3,category=$4,color=$5,published=$6,self_enroll=$7,updated_at=now() WHERE id=$1 RETURNING *',
+        [
+          id,
+          merged.title,
+          merged.description,
+          merged.category,
+          merged.color,
+          merged.published,
+          merged.self_enroll,
+        ],
+      );
+      return updated;
+    });
   });
   app.delete('/api/courses/:id', async (request) => {
     requireAdmin(request);
@@ -401,36 +415,67 @@ export async function buildApp(options: { logger?: boolean; rateLimit?: boolean 
   app.post('/api/courses/:id/lessons', async (request, reply) => {
     requireAdmin(request);
     const { id } = request.params as any;
-    await editableCourse(id);
-    const b = await validateLesson(lessonSchema.parse(request.body));
-    const [lesson] = await sql(
-      'INSERT INTO lessons(id,course_id,title,type,position,body,video_id,image_id,activity) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
-      [randomUUID(), id, b.title, b.type, b.position, b.body, b.video_id, b.image_id, b.activity],
-    );
+    const lesson = await transaction(async (db) => {
+      const course = await editableCourse(id, db);
+      const b = await validateLesson(lessonSchema.parse(request.body), course.published, db);
+      const {
+        rows: [created],
+      } = await db.query(
+        'INSERT INTO lessons(id,course_id,title,type,position,body,video_id,image_id,activity) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
+        [randomUUID(), id, b.title, b.type, b.position, b.body, b.video_id, b.image_id, b.activity],
+      );
+      await db.query('UPDATE courses SET updated_at=now() WHERE id=$1', [id]);
+      return created;
+    });
     return reply.code(201).send(lesson);
   });
   app.patch('/api/lessons/:id', async (request) => {
     requireAdmin(request);
     const { id } = request.params as any;
-    const [current] = await sql('SELECT * FROM lessons WHERE id=$1', [id]);
-    if (!current) throw new HttpError(404, 'Урок не найден');
-    await editableCourse(current.course_id);
-    const b = await validateLesson(
-      lessonSchema.parse({ ...current, ...z.record(z.string(), z.unknown()).parse(request.body) }),
-    );
-    const [lesson] = await sql(
-      'UPDATE lessons SET title=$2,type=$3,position=$4,body=$5,video_id=$6,image_id=$7,activity=$8 WHERE id=$1 RETURNING *',
-      [id, b.title, b.type, b.position, b.body, b.video_id, b.image_id, b.activity],
-    );
-    return lesson;
+    const [initial] = await sql('SELECT course_id FROM lessons WHERE id=$1', [id]);
+    if (!initial) throw new HttpError(404, 'Урок не найден');
+    return transaction(async (db) => {
+      const course = await editableCourse(initial.course_id, db);
+      const {
+        rows: [current],
+      } = await db.query('SELECT * FROM lessons WHERE id=$1', [id]);
+      if (!current) throw new HttpError(404, 'Урок не найден');
+      const b = await validateLesson(
+        lessonSchema.parse({
+          ...current,
+          ...z.record(z.string(), z.unknown()).parse(request.body),
+        }),
+        course.published,
+        db,
+      );
+      const {
+        rows: [lesson],
+      } = await db.query(
+        'UPDATE lessons SET title=$2,type=$3,position=$4,body=$5,video_id=$6,image_id=$7,activity=$8 WHERE id=$1 RETURNING *',
+        [id, b.title, b.type, b.position, b.body, b.video_id, b.image_id, b.activity],
+      );
+      if (b.video_id !== current.video_id)
+        await db.query(
+          'UPDATE progress SET position_seconds=0,watched_seconds=0,last_ping_at=NULL WHERE lesson_id=$1',
+          [id],
+        );
+      await db.query('UPDATE courses SET updated_at=now() WHERE id=$1', [current.course_id]);
+      return lesson;
+    });
   });
   app.delete('/api/lessons/:id', async (request) => {
     requireAdmin(request);
     const { id } = request.params as any;
     const [lesson] = await sql('SELECT course_id FROM lessons WHERE id=$1', [id]);
     if (!lesson) throw new HttpError(404, 'Урок не найден');
-    await editableCourse(lesson.course_id);
-    await sql('DELETE FROM lessons WHERE id=$1', [id]);
+    await transaction(async (db) => {
+      await editableCourse(lesson.course_id, db);
+      await db.query('DELETE FROM lessons WHERE id=$1', [id]);
+      await db.query(
+        `UPDATE courses SET updated_at=now(),published=published AND EXISTS(SELECT 1 FROM lessons WHERE course_id=$1) WHERE id=$1`,
+        [lesson.course_id],
+      );
+    });
     return { ok: true };
   });
   app.post(

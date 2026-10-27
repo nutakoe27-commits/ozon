@@ -1,7 +1,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL =
@@ -15,7 +15,8 @@ const { buildApp } = await import('../server/app.js');
 const { migrate, pool, sql } = await import('../server/db.js');
 const { hashPassword } = await import('../server/auth.js');
 const { processNext, command } = await import('../server/worker.js');
-const { uploadPath } = await import('../server/uploads.js');
+const { uploadPath, mediaPath } = await import('../server/uploads.js');
+const { evaluate, hotspotSchema, safeLesson } = await import('../server/domain.js');
 let app: Awaited<ReturnType<typeof buildApp>>;
 let admin: Record<string, string>,
   student: Record<string, string>,
@@ -202,6 +203,8 @@ test('student payload contains neither correct answers nor target coordinates', 
   assert.equal(q.activity.questions[0].correctIndex, undefined);
   assert.equal(q.activity.questions[0].explanation, undefined);
   assert.equal(h.activity.target, undefined);
+  assert.equal(h.activity.targets, undefined);
+  assert.deepEqual(h.activity.start, { x: 50, y: 85 });
   assert.equal(
     (await request('POST', `/api/lessons/${quizId}/attempt`, outsider, { response: { q1: 1 } }))
       .statusCode,
@@ -249,13 +252,39 @@ test('hotspot evaluates coordinates server-side, awards XP once and issues certi
   ]);
   assert.equal(count.count, 1);
 });
-test('started courses cannot be rewritten; a copy is an independent draft', async () => {
-  await request('PATCH', `/api/courses/${courseId}`, admin, { published: false });
+test('started published courses can be edited without losing results; a copy remains independent', async () => {
+  const before = await sql('SELECT * FROM progress WHERE lesson_id=$1 ORDER BY user_id', [quizId]);
+  const certificates = await sql('SELECT * FROM certificates WHERE course_id=$1', [courseId]);
   assert.equal(
-    (await request('PATCH', `/api/lessons/${quizId}`, admin, { title: 'Изменённый урок' }))
-      .statusCode,
-    409,
+    (
+      await request('PATCH', `/api/lessons/${quizId}`, admin, {
+        title: 'Изменённый урок',
+        body: 'Обновлённый материал',
+      })
+    ).statusCode,
+    200,
   );
+  assert.deepEqual(
+    await sql('SELECT * FROM progress WHERE lesson_id=$1 ORDER BY user_id', [quizId]),
+    before,
+  );
+  assert.deepEqual(
+    await sql('SELECT * FROM certificates WHERE course_id=$1', [courseId]),
+    certificates,
+  );
+  const extra = await request('POST', `/api/courses/${courseId}/lessons`, admin, {
+    title: 'Новый урок в опубликованном курсе',
+    type: 'quiz',
+    position: 2,
+    activity: quiz,
+  });
+  assert.equal(extra.statusCode, 201, extra.body);
+  assert.equal(
+    (await request('PATCH', `/api/lessons/${extra.json().id}`, admin, { position: 3 })).statusCode,
+    200,
+  );
+  assert.equal((await request('DELETE', `/api/lessons/${extra.json().id}`, admin)).statusCode, 200);
+  assert.equal((await request('GET', `/api/courses/${courseId}`, student)).json().published, true);
   const copy = await request('POST', `/api/courses/${courseId}/copy`, admin);
   assert.equal(copy.statusCode, 200, copy.body);
   const fresh = await request('GET', `/api/courses/${copy.json().id}`, admin);
@@ -588,5 +617,226 @@ test('deleting a completed course removes its certificates and XP, but preserves
   assert.equal(
     (await request('DELETE', `/api/courses/${randomUUID()}`, admin, { confirm: true })).statusCode,
     404,
+  );
+});
+test('multiple zones accept any safe target, preserve legacy lessons and conceal answers', () => {
+  const config = {
+    instruction: hotspot.instruction,
+    targets: [
+      { x: 5, y: 10, width: 15, height: 20 },
+      { x: 60, y: 60, width: 20, height: 20 },
+    ],
+    start: { x: 45, y: 90 },
+    explanation: 'Выберите зелёную зону.',
+  };
+  assert.equal(evaluate('hotspot', config, { x: 10, y: 20 }).passed, true);
+  assert.equal(evaluate('hotspot', config, { x: 70, y: 70 }).passed, true);
+  assert.equal(evaluate('hotspot', config, { x: 45, y: 45 }).passed, false);
+  assert.equal(evaluate('hotspot', hotspot, { x: 20, y: 30 }).passed, true);
+  assert.deepEqual(hotspotSchema.parse(hotspot).start, { x: 50, y: 85 });
+  const visible = safeLesson({ type: 'hotspot', activity: config }, false);
+  assert.deepEqual(visible.activity, { instruction: config.instruction, start: config.start });
+  for (const invalid of [
+    { ...config, targets: [] },
+    { ...config, targets: [{ x: 95, y: 10, width: 20, height: 20 }] },
+    { ...config, start: { x: 101, y: 30 } },
+    { ...config, targets: Array(21).fill(config.targets[0]) },
+  ])
+    assert.equal(hotspotSchema.safeParse(invalid).success, false);
+});
+test('a live multi-zone lesson stores its starting point, grades each zone and hides target data', async () => {
+  const created = await request('POST', '/api/courses', admin, {
+    title: 'Новые возможности визуальной практики',
+  });
+  const id = created.json().id;
+  const body = {
+    title: 'Две безопасные зоны',
+    type: 'hotspot',
+    activity: {
+      instruction: 'Выберите любое безопасное место.',
+      targets: [
+        { x: 5, y: 10, width: 15, height: 20 },
+        { x: 60, y: 60, width: 20, height: 20 },
+      ],
+      start: { x: 45, y: 90 },
+    },
+  };
+  const lesson = await request('POST', `/api/courses/${id}/lessons`, admin, body);
+  assert.equal(lesson.statusCode, 201, lesson.body);
+  await request('PATCH', `/api/courses/${id}`, admin, { published: true });
+  await request('POST', `/api/courses/${id}/enrollments`, admin, { userIds: [outsiderId] });
+  const view = await request('GET', `/api/courses/${id}`, outsider);
+  const activity = view.json().lessons[0].activity;
+  assert.deepEqual(activity.start, body.activity.start);
+  assert.equal(activity.targets, undefined);
+  assert.equal(activity.target, undefined);
+  assert.equal(
+    (
+      await request('POST', `/api/lessons/${lesson.json().id}/attempt`, outsider, {
+        response: { x: 10, y: 20 },
+      })
+    ).json().passed,
+    true,
+  );
+  assert.equal(
+    (
+      await request('POST', `/api/lessons/${lesson.json().id}/attempt`, outsider, {
+        response: { x: 70, y: 70 },
+      })
+    ).json().passed,
+    true,
+  );
+  const edit = await request('PATCH', `/api/lessons/${lesson.json().id}`, admin, {
+    activity: { ...body.activity, start: { x: 40, y: 80 } },
+  });
+  assert.equal(edit.statusCode, 200, edit.body);
+  assert.equal((await request('GET', '/api/dashboard', outsider)).json().xp, 75);
+});
+test('new lessons on a completed live course preserve its certificate without reporting new lessons as completed', async () => {
+  const course = (
+    await request('POST', '/api/courses', admin, { title: 'Обновляемое обучение' })
+  ).json();
+  const first = (
+    await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+      title: 'Первое задание курса',
+      type: 'quiz',
+      activity: quiz,
+    })
+  ).json();
+  await request('PATCH', `/api/courses/${course.id}`, admin, { published: true });
+  await request('POST', `/api/courses/${course.id}/enrollments`, admin, { userIds: [outsiderId] });
+  const done = await request('POST', `/api/lessons/${first.id}/attempt`, outsider, {
+    response: { q1: 1 },
+  });
+  const certificate = done.json().certificateId;
+  assert.ok(certificate);
+  const extra = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+    title: 'Новый материал курса',
+    type: 'quiz',
+    position: 1,
+    activity: quiz,
+  });
+  assert.equal(extra.statusCode, 201, extra.body);
+  assert.equal(
+    (
+      await request('POST', `/api/lessons/${first.id}/attempt`, outsider, { response: { q1: 1 } })
+    ).json().certificateId,
+    null,
+  );
+  assert.equal(
+    (await request('GET', `/api/certificates/${certificate}`, outsider)).statusCode,
+    200,
+  );
+  const lessons = (await request('GET', `/api/courses/${course.id}`, outsider)).json().lessons;
+  assert.ok(lessons.find((l: any) => l.id === first.id).completed_at);
+  assert.equal(lessons.find((l: any) => l.id === extra.json().id).completed_at, null);
+  assert.equal(
+    (
+      await request('POST', `/api/lessons/${extra.json().id}/attempt`, outsider, {
+        response: { q1: 1 },
+      })
+    ).json().certificateId,
+    certificate,
+  );
+  assert.equal((await request('DELETE', `/api/lessons/${extra.json().id}`, admin)).statusCode, 200);
+  assert.equal((await request('DELETE', `/api/lessons/${first.id}`, admin)).statusCode, 200);
+  assert.equal((await request('GET', `/api/courses/${course.id}`, admin)).json().published, false);
+  assert.equal(
+    (await request('GET', `/api/certificates/${certificate}`, outsider)).statusCode,
+    200,
+  );
+});
+test('quiz video and photo stay private, watching does not pass the test or overwrite its XP', async () => {
+  const sharp = (await import('sharp')).default;
+  const imageId = randomUUID();
+  await mkdir(mediaPath(imageId), { recursive: true });
+  await sharp({ create: { width: 200, height: 100, channels: 3, background: '#448855' } })
+    .webp()
+    .toFile(path.join(mediaPath(imageId), 'image.webp'));
+  await sql(
+    "INSERT INTO media(id,kind,name,owner_id,status) VALUES($1,'image','Quiz introduction',$2,'ready')",
+    [imageId, adminId],
+  );
+  const course = (
+    await request('POST', '/api/courses', admin, { title: 'Тест с видео и фотографией' })
+  ).json();
+  const lesson = await request('POST', `/api/courses/${course.id}/lessons`, admin, {
+    title: 'Видеоматериал и вопросы',
+    type: 'quiz',
+    video_id: uploadId,
+    image_id: imageId,
+    activity: quiz,
+  });
+  assert.equal(lesson.statusCode, 201, lesson.body);
+  assert.equal(
+    (await request('PATCH', `/api/courses/${course.id}`, admin, { published: true })).statusCode,
+    200,
+  );
+  await request('POST', `/api/courses/${course.id}/enrollments`, admin, { userIds: [studentId] });
+  assert.equal(
+    (await request('GET', `/api/media/${imageId}/image.webp`, outsider)).statusCode,
+    404,
+  );
+  assert.equal((await request('GET', `/api/media/${imageId}/image.webp`, student)).statusCode, 200);
+  assert.equal(
+    (await request('GET', `/api/media/${uploadId}/master.m3u8`, student)).statusCode,
+    200,
+  );
+  await request('POST', `/api/lessons/${lesson.json().id}/progress`, student, { position: 0 });
+  await sql(
+    "UPDATE progress SET last_ping_at=now()-interval '3 seconds' WHERE lesson_id=$1 AND user_id=$2",
+    [lesson.json().id, studentId],
+  );
+  const viewing = await request('POST', `/api/lessons/${lesson.json().id}/progress`, student, {
+    position: 2,
+  });
+  assert.equal(viewing.statusCode, 200, viewing.body);
+  assert.equal(viewing.json().completed_at, null);
+  assert.equal(viewing.json().xp, 0);
+  assert.equal(viewing.json().certificateId, null);
+  const completed = await request('POST', `/api/lessons/${lesson.json().id}/attempt`, student, {
+    response: { q1: 1 },
+  });
+  assert.ok(completed.json().certificateId);
+  const afterwards = await request('POST', `/api/lessons/${lesson.json().id}/progress`, student, {
+    position: 2,
+  });
+  assert.equal(afterwards.json().xp, 50);
+  assert.ok(afterwards.json().completed_at);
+  const reset = await request('PATCH', `/api/lessons/${lesson.json().id}`, admin, {
+    video_id: null,
+  });
+  assert.equal(reset.statusCode, 200, reset.body);
+  const [stored] = await sql('SELECT * FROM progress WHERE user_id=$1 AND lesson_id=$2', [
+    studentId,
+    lesson.json().id,
+  ]);
+  assert.equal(stored.position_seconds, 0);
+  assert.equal(stored.watched_seconds, 0);
+  assert.equal(stored.xp, 50);
+  assert.ok(stored.completed_at);
+  const queuedId = randomUUID();
+  await sql(
+    "INSERT INTO media(id,kind,name,owner_id,status) VALUES($1,'video','Pending introduction',$2,'queued')",
+    [queuedId, adminId],
+  );
+  assert.equal(
+    (await request('PATCH', `/api/lessons/${lesson.json().id}`, admin, { video_id: queuedId }))
+      .statusCode,
+    400,
+  );
+  const draft = (
+    await request('POST', '/api/courses', admin, { title: 'Черновик с обрабатываемым вступлением' })
+  ).json();
+  const pending = await request('POST', `/api/courses/${draft.id}/lessons`, admin, {
+    title: 'Вступление перед тестом',
+    type: 'quiz',
+    activity: quiz,
+    video_id: queuedId,
+  });
+  assert.equal(pending.statusCode, 201, pending.body);
+  assert.equal(
+    (await request('PATCH', `/api/courses/${draft.id}`, admin, { published: true })).statusCode,
+    400,
   );
 });
